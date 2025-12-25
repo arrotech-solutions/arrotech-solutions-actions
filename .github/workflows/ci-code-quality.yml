@@ -95,7 +95,9 @@ jobs:
         env:
           ESLINT_ARGS: ${{ inputs.eslint-args }}
           FAIL_ON_WARNINGS: ${{ inputs.fail-on-warnings }}
+        shell: bash
         run: |
+          # shellcheck disable=SC2086
           if [ "$FAIL_ON_WARNINGS" = "true" ]; then
             npx eslint . $ESLINT_ARGS --max-warnings=0 --format stylish
           else

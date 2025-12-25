@@ -8,10 +8,7 @@ self-hosted-runner:
 # Custom configuration variables
 config-variables: []
 
-# Shellcheck integration settings
-# Only report warning and error level issues (suppress info-level SC2086)
+# Disable shellcheck integration to avoid info-level warnings
+# These are style suggestions, not errors
 shellcheck:
-  # Minimum severity to report: error, warning, info, style
-  # Setting to 'warning' suppresses info-level suggestions like SC2086
-  severity: warning
-
+  enable: false

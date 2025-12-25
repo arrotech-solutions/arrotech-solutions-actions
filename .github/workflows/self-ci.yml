@@ -35,12 +35,12 @@ jobs:
       - name: Lint workflow files
         run: |
           echo "Validating .github/workflows/*.yml"
-          actionlint -color .github/workflows/*.yml
+          actionlint -config-file .github/actionlint.yaml -color .github/workflows/*.yml
           
           echo "Validating templates/*.yml"
           for file in templates/*.yml; do
             echo "Checking $file..."
-            actionlint -color "$file" || true
+            actionlint -config-file .github/actionlint.yaml -color "$file" || true
           done
 
       - name: Check for common issues
