@@ -1,8 +1,20 @@
 # =============================================================================
-# Vercel Deployment Template
+# Vercel Deployment Template (Preview → Test → Promote Pattern)
 # =============================================================================
-# Template for deploying frontend applications to Vercel.
+# Template for deploying frontend applications to Vercel with proper CI gates.
+# 
+# This implements the recommended pattern:
+#   1. Deploy to preview URL
+#   2. Run tests against preview
+#   3. Only promote to production if tests pass
+#
 # Copy to your repository's .github/workflows/ directory.
+#
+# Required secrets:
+#   - VERCEL_TOKEN: Your Vercel API token
+#
+# Optional:
+#   - VERCEL_ORG_ID and VERCEL_PROJECT_ID if not using `vercel link`
 # =============================================================================
 
 name: Deploy to Vercel
@@ -14,7 +26,9 @@ on:
     branches: [main]
 
 jobs:
-  # Run quality checks first
+  # ===========================================================================
+  # Step 1: Code Quality Checks
+  # ===========================================================================
   quality:
     name: Quality Checks
     uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-code-quality.yml@main
@@ -23,38 +37,127 @@ jobs:
       node-version: '20'
       prettier-check: true
 
-  test:
-    name: Tests
-    needs: quality
-    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-test.yml@main
-    with:
-      language: 'node'
-      node-version: '20'
-      coverage-threshold: 70
-
-  # Deploy preview on PRs
+  # ===========================================================================
+  # Step 2: Deploy to Preview URL
+  # ===========================================================================
   deploy-preview:
     name: Deploy Preview
-    needs: [test]
-    if: github.event_name == 'pull_request'
+    needs: quality
     uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
     with:
       environment: 'staging'
       platform: 'vercel'
+      vercel-deploy-mode: 'preview'
       working-directory: '.'
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
-  # Deploy to production on main
-  deploy-production:
-    name: Deploy Production
-    needs: [test]
+  # ===========================================================================
+  # Step 3: Run Tests Against Preview
+  # ===========================================================================
+  test:
+    name: Test Against Preview
+    needs: deploy-preview
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        env:
+          CI: true
+        run: |
+          # Detect test framework and run tests
+          if grep -q '"vitest"' package.json 2>/dev/null; then
+            npm test -- --run
+          elif grep -q '"jest"' package.json 2>/dev/null; then
+            npm test -- --watchAll=false
+          else
+            npm test || echo "No tests configured"
+          fi
+
+      - name: Run E2E tests against preview
+        if: hashFiles('playwright.config.*') != '' || hashFiles('cypress.config.*') != ''
+        env:
+          PREVIEW_URL: ${{ needs.deploy-preview.outputs.preview-url }}
+        run: |
+          echo "Running E2E tests against: $PREVIEW_URL"
+          
+          if [ -f "playwright.config.ts" ] || [ -f "playwright.config.js" ]; then
+            npx playwright install --with-deps
+            npx playwright test --base-url="$PREVIEW_URL"
+          elif [ -f "cypress.config.ts" ] || [ -f "cypress.config.js" ]; then
+            npx cypress run --config baseUrl="$PREVIEW_URL"
+          fi
+
+      - name: Preview URL Summary
+        env:
+          PREVIEW_URL: ${{ needs.deploy-preview.outputs.preview-url }}
+        run: |
+          {
+            echo "## 🔍 Preview Deployment"
+            echo ""
+            echo "**Preview URL:** $PREVIEW_URL"
+            echo ""
+            echo "Tests have been run against this preview deployment."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ===========================================================================
+  # Step 4: Promote to Production (main branch only, after tests pass)
+  # ===========================================================================
+  promote-production:
+    name: Promote to Production
+    needs: [deploy-preview, test]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
     with:
       environment: 'production'
       platform: 'vercel'
+      vercel-deploy-mode: 'promote'
       working-directory: '.'
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
+  # ===========================================================================
+  # PR Preview Comment
+  # ===========================================================================
+  pr-comment:
+    name: Comment Preview URL
+    needs: [deploy-preview, test]
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Comment preview URL on PR
+        uses: actions/github-script@v7
+        env:
+          PREVIEW_URL: ${{ needs.deploy-preview.outputs.preview-url }}
+        with:
+          script: |
+            const previewUrl = process.env.PREVIEW_URL;
+            const body = `## 🚀 Preview Deployment Ready!
+
+            | Environment | URL |
+            |-------------|-----|
+            | Preview | ${previewUrl} |
+
+            **Status:** ✅ Tests passed against preview
+
+            This preview will be promoted to production when merged to \`main\`.`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });

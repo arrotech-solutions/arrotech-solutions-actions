@@ -99,6 +99,27 @@ on:
         required: false
         type: string
         default: 'dist'
+      # Vercel-specific inputs for preview/promote pattern
+      vercel-deploy-mode:
+        description: 'Vercel deploy mode: auto (default), preview (deploy to preview only), promote (promote latest to production)'
+        required: false
+        type: string
+        default: 'auto'
+      vercel-org-id:
+        description: 'Vercel organization ID (optional, uses linked project if not set)'
+        required: false
+        type: string
+        default: ''
+      vercel-project-id:
+        description: 'Vercel project ID (optional, uses linked project if not set)'
+        required: false
+        type: string
+        default: ''
+      vercel-preview-url:
+        description: 'Preview URL to run tests against (output from preview deployment)'
+        required: false
+        type: string
+        default: ''
       # SSH deployment inputs
       ssh-host:
         description: 'SSH host for direct deployment'
@@ -194,6 +215,12 @@ on:
       deployment-status:
         description: 'Status of the deployment'
         value: ${{ jobs.deploy.outputs.status }}
+      preview-url:
+        description: 'Vercel preview URL (for preview deployments)'
+        value: ${{ jobs.deploy-vercel.outputs.preview-url }}
+      deployment-id:
+        description: 'Vercel deployment ID (for promoting later)'
+        value: ${{ jobs.deploy-vercel.outputs.deployment-id }}
     secrets:
       KUBE_CONFIG:
         description: 'Kubeconfig file contents (base64 encoded)'
@@ -450,6 +477,11 @@ jobs:
   # ---------------------------------------------------------------------------
   # Vercel Deployment
   # ---------------------------------------------------------------------------
+  # Supports three modes via vercel-deploy-mode:
+  #   - auto: Deploy preview for non-production, production for production env
+  #   - preview: Always deploy to preview URL (for testing before promote)
+  #   - promote: Promote latest preview deployment to production
+  # ---------------------------------------------------------------------------
   deploy-vercel:
     name: Deploy to Vercel
     if: inputs.platform == 'vercel'
@@ -457,8 +489,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     outputs:
-      url: ${{ steps.deploy.outputs.url }}
-      status: ${{ steps.deploy.outputs.status }}
+      url: ${{ steps.deploy.outputs.url || steps.promote.outputs.url }}
+      status: ${{ steps.deploy.outputs.status || steps.promote.outputs.status }}
+      preview-url: ${{ steps.deploy.outputs.preview-url }}
+      deployment-id: ${{ steps.deploy.outputs.deployment-id }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -475,28 +509,49 @@ jobs:
       - name: Install Vercel CLI
         run: npm install -g vercel@latest
 
-      - name: Pull Vercel environment
+      - name: Configure Vercel project
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ inputs.vercel-org-id }}
+          VERCEL_PROJECT_ID: ${{ inputs.vercel-project-id }}
           ENVIRONMENT: ${{ inputs.environment }}
-        run: vercel pull --yes --environment="$ENVIRONMENT" --token="$VERCEL_TOKEN"
+        run: |
+          # Set org/project IDs if provided
+          if [ -n "$VERCEL_ORG_ID" ] && [ -n "$VERCEL_PROJECT_ID" ]; then
+            echo "VERCEL_ORG_ID=$VERCEL_ORG_ID" >> "$GITHUB_ENV"
+            echo "VERCEL_PROJECT_ID=$VERCEL_PROJECT_ID" >> "$GITHUB_ENV"
+          fi
+          
+          # Pull Vercel environment configuration
+          vercel pull --yes --environment="$ENVIRONMENT" --token="$VERCEL_TOKEN"
 
       - name: Build project
+        if: inputs.vercel-deploy-mode != 'promote'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOY_MODE: ${{ inputs.vercel-deploy-mode }}
           IS_PRODUCTION: ${{ inputs.environment == 'production' }}
         run: |
-          if [ "$IS_PRODUCTION" = "true" ]; then
+          # For 'preview' mode, always build without --prod
+          # For 'auto' mode, build based on environment
+          if [ "$DEPLOY_MODE" = "preview" ]; then
+            echo "Building for preview deployment..."
+            vercel build --token="$VERCEL_TOKEN"
+          elif [ "$IS_PRODUCTION" = "true" ]; then
+            echo "Building for production deployment..."
             vercel build --prod --token="$VERCEL_TOKEN"
           else
+            echo "Building for staging/development..."
             vercel build --token="$VERCEL_TOKEN"
           fi
 
       - name: Deploy to Vercel
         id: deploy
+        if: inputs.vercel-deploy-mode != 'promote'
         env:
           DRY_RUN_MODE: ${{ inputs.dry-run }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOY_MODE: ${{ inputs.vercel-deploy-mode }}
           IS_PRODUCTION: ${{ inputs.environment == 'production' }}
         run: |
           if [ "$DRY_RUN_MODE" = "true" ]; then
@@ -505,13 +560,92 @@ jobs:
             exit 0
           fi
           
-          if [ "$IS_PRODUCTION" = "true" ]; then
+          # Determine deployment type
+          if [ "$DEPLOY_MODE" = "preview" ]; then
+            # Preview mode: always deploy to preview URL, never to production
+            echo "Deploying to preview URL..."
+            DEPLOY_OUTPUT=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN" 2>&1)
+            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | tail -1)
+            
+            # Extract deployment ID from URL
+            DEPLOYMENT_ID=$(echo "$DEPLOY_URL" | sed 's|https://||' | cut -d'.' -f1)
+            
+            echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+            echo "preview-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+            echo "deployment-id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
+            echo "status=preview-deployed" >> "$GITHUB_OUTPUT"
+            
+            echo "✅ Preview deployed: $DEPLOY_URL"
+            echo "📋 Deployment ID: $DEPLOYMENT_ID"
+            echo ""
+            echo "To promote to production after tests pass, use:"
+            echo "  vercel promote $DEPLOY_URL --token=\$VERCEL_TOKEN"
+            
+          elif [ "$IS_PRODUCTION" = "true" ]; then
+            # Auto mode + production: deploy directly to production
+            echo "Deploying to production..."
             DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+            echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+            echo "status=completed" >> "$GITHUB_OUTPUT"
+            
           else
+            # Auto mode + non-production: deploy to preview
+            echo "Deploying to preview (staging/development)..."
             DEPLOY_URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
+            echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+            echo "preview-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+            echo "status=completed" >> "$GITHUB_OUTPUT"
           fi
-          echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-          echo "status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Promote to Production
+        id: promote
+        if: inputs.vercel-deploy-mode == 'promote'
+        env:
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ "$DRY_RUN_MODE" = "true" ]; then
+            echo "Dry run - would promote to production"
+            echo "status=dry-run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          echo "Promoting latest deployment to production..."
+          
+          # Get the latest deployment URL and promote it
+          LATEST_DEPLOYMENT=$(vercel list --token="$VERCEL_TOKEN" --limit=1 2>/dev/null | tail -1 | awk '{print $1}')
+          
+          if [ -n "$LATEST_DEPLOYMENT" ]; then
+            # Promote using vercel alias or by redeploying with --prod
+            PROD_URL=$(vercel promote "$LATEST_DEPLOYMENT" --token="$VERCEL_TOKEN" 2>&1 || vercel --prod --token="$VERCEL_TOKEN")
+            echo "url=$PROD_URL" >> "$GITHUB_OUTPUT"
+            echo "status=promoted" >> "$GITHUB_OUTPUT"
+            echo "✅ Promoted to production: $PROD_URL"
+          else
+            echo "::error::No deployment found to promote"
+            exit 1
+          fi
+
+      - name: Output deployment summary
+        if: always()
+        env:
+          DEPLOY_URL: ${{ steps.deploy.outputs.url || steps.promote.outputs.url }}
+          PREVIEW_URL: ${{ steps.deploy.outputs.preview-url }}
+          DEPLOY_MODE: ${{ inputs.vercel-deploy-mode }}
+          STATUS: ${{ steps.deploy.outputs.status || steps.promote.outputs.status }}
+        run: |
+          {
+            echo "## Vercel Deployment Summary"
+            echo ""
+            echo "| Property | Value |"
+            echo "|----------|-------|"
+            echo "| Mode | $DEPLOY_MODE |"
+            echo "| Status | $STATUS |"
+            echo "| URL | $DEPLOY_URL |"
+            if [ -n "$PREVIEW_URL" ]; then
+              echo "| Preview URL | $PREVIEW_URL |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Netlify Deployment

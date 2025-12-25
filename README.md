@@ -194,9 +194,54 @@ jobs:
 | `kubernetes` | K8s clusters (Helm or kubectl) |
 | `ecs` | AWS Elastic Container Service |
 | `flyio` | **Fly.io backend apps** |
-| `vercel` | **Vercel frontend apps** |
+| `vercel` | **Vercel frontend apps** (supports preview→test→promote) |
 | `netlify` | Netlify static sites |
 | `ssh` | Direct SSH deployment |
+
+**Vercel Deploy Modes:**
+
+The `vercel-deploy-mode` input supports three patterns:
+
+| Mode | Description |
+|------|-------------|
+| `auto` | Default. Preview for staging, production for production environment |
+| `preview` | Always deploy to preview URL only (for testing before promote) |
+| `promote` | Promote latest preview deployment to production |
+
+**Example: Preview → Test → Promote Pattern**
+
+```yaml
+jobs:
+  # Deploy to preview first
+  deploy-preview:
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      platform: 'vercel'
+      environment: 'staging'
+      vercel-deploy-mode: 'preview'
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  # Run tests against preview URL
+  test:
+    needs: deploy-preview
+    runs-on: ubuntu-latest
+    steps:
+      - run: npm test
+      - run: npx playwright test --base-url=${{ needs.deploy-preview.outputs.preview-url }}
+
+  # Only promote if tests pass
+  promote:
+    needs: [deploy-preview, test]
+    if: github.ref == 'refs/heads/main'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      platform: 'vercel'
+      environment: 'production'
+      vercel-deploy-mode: 'promote'
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+```
 
 ---
 
@@ -243,7 +288,7 @@ Ready-to-use workflow templates for common project types:
 | [`node-full-pipeline.yml`](templates/node-full-pipeline.yml) | Complete Node.js CI/CD with Docker | `cp templates/node-full-pipeline.yml .github/workflows/` |
 | [`python-full-pipeline.yml`](templates/python-full-pipeline.yml) | Complete Python CI/CD | `cp templates/python-full-pipeline.yml .github/workflows/` |
 | [`minimal-ci.yml`](templates/minimal-ci.yml) | Lightweight CI for small projects | `cp templates/minimal-ci.yml .github/workflows/` |
-| [`vercel-deploy.yml`](templates/vercel-deploy.yml) | **Frontend** deployment to Vercel | `cp templates/vercel-deploy.yml .github/workflows/` |
+| [`vercel-deploy.yml`](templates/vercel-deploy.yml) | **Frontend** to Vercel (preview→test→promote) | `cp templates/vercel-deploy.yml .github/workflows/` |
 | [`flyio-deploy.yml`](templates/flyio-deploy.yml) | **Backend** deployment to Fly.io | `cp templates/flyio-deploy.yml .github/workflows/` |
 
 ---
