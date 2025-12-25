@@ -570,10 +570,12 @@ jobs:
             # Extract deployment ID from URL
             DEPLOYMENT_ID=$(echo "$DEPLOY_URL" | sed 's|https://||' | cut -d'.' -f1)
             
-            echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-            echo "preview-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-            echo "deployment-id=$DEPLOYMENT_ID" >> "$GITHUB_OUTPUT"
-            echo "status=preview-deployed" >> "$GITHUB_OUTPUT"
+            {
+              echo "url=$DEPLOY_URL"
+              echo "preview-url=$DEPLOY_URL"
+              echo "deployment-id=$DEPLOYMENT_ID"
+              echo "status=preview-deployed"
+            } >> "$GITHUB_OUTPUT"
             
             echo "✅ Preview deployed: $DEPLOY_URL"
             echo "📋 Deployment ID: $DEPLOYMENT_ID"
@@ -585,16 +587,20 @@ jobs:
             # Auto mode + production: deploy directly to production
             echo "Deploying to production..."
             DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
-            echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-            echo "status=completed" >> "$GITHUB_OUTPUT"
+            {
+              echo "url=$DEPLOY_URL"
+              echo "status=completed"
+            } >> "$GITHUB_OUTPUT"
             
           else
             # Auto mode + non-production: deploy to preview
             echo "Deploying to preview (staging/development)..."
             DEPLOY_URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
-            echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-            echo "preview-url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
-            echo "status=completed" >> "$GITHUB_OUTPUT"
+            {
+              echo "url=$DEPLOY_URL"
+              echo "preview-url=$DEPLOY_URL"
+              echo "status=completed"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Promote to Production
@@ -618,8 +624,10 @@ jobs:
           if [ -n "$LATEST_DEPLOYMENT" ]; then
             # Promote using vercel alias or by redeploying with --prod
             PROD_URL=$(vercel promote "$LATEST_DEPLOYMENT" --token="$VERCEL_TOKEN" 2>&1 || vercel --prod --token="$VERCEL_TOKEN")
-            echo "url=$PROD_URL" >> "$GITHUB_OUTPUT"
-            echo "status=promoted" >> "$GITHUB_OUTPUT"
+            {
+              echo "url=$PROD_URL"
+              echo "status=promoted"
+            } >> "$GITHUB_OUTPUT"
             echo "✅ Promoted to production: $PROD_URL"
           else
             echo "::error::No deployment found to promote"

@@ -8,7 +8,9 @@ self-hosted-runner:
 # Custom configuration variables
 config-variables: []
 
-# Disable shellcheck integration to avoid info-level warnings
-# These are style suggestions, not errors
+# Disable shellcheck by setting empty path
+# This prevents style warnings like SC2129 from failing the build
 shellcheck:
-  enable: false
+  # Setting empty path disables shellcheck integration
+  # Alternatively, you can set the path to a non-existent binary
+  path: ""
