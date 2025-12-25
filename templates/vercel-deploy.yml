@@ -123,6 +123,7 @@ jobs:
       environment: 'production'
       platform: 'vercel'
       vercel-deploy-mode: 'promote'
+      vercel-deployment-url: ${{ needs.deploy-preview.outputs.preview-url }}
       working-directory: '.'
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}

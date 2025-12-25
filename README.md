@@ -230,7 +230,7 @@ jobs:
       - run: npm test
       - run: npx playwright test --base-url=${{ needs.deploy-preview.outputs.preview-url }}
 
-  # Only promote if tests pass
+  # Only promote if tests pass (pass the deployment URL!)
   promote:
     needs: [deploy-preview, test]
     if: github.ref == 'refs/heads/main'
@@ -239,6 +239,7 @@ jobs:
       platform: 'vercel'
       environment: 'production'
       vercel-deploy-mode: 'promote'
+      vercel-deployment-url: ${{ needs.deploy-preview.outputs.preview-url }}
     secrets:
       VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 ```

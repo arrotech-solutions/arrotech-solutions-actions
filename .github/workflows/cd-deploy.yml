@@ -120,6 +120,11 @@ on:
         required: false
         type: string
         default: ''
+      vercel-deployment-url:
+        description: 'Vercel deployment URL to promote (required for promote mode, passed from preview deployment)'
+        required: false
+        type: string
+        default: ''
       # SSH deployment inputs
       ssh-host:
         description: 'SSH host for direct deployment'
@@ -609,6 +614,7 @@ jobs:
         env:
           DRY_RUN_MODE: ${{ inputs.dry-run }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          DEPLOYMENT_URL: ${{ inputs.vercel-deployment-url }}
         run: |
           if [ "$DRY_RUN_MODE" = "true" ]; then
             echo "Dry run - would promote to production"
@@ -616,21 +622,33 @@ jobs:
             exit 0
           fi
           
-          echo "Promoting latest deployment to production..."
+          # Use provided deployment URL or try to find the latest
+          if [ -n "$DEPLOYMENT_URL" ]; then
+            echo "Promoting deployment: $DEPLOYMENT_URL"
+            TARGET_DEPLOYMENT="$DEPLOYMENT_URL"
+          else
+            echo "No deployment URL provided, finding latest deployment..."
+            TARGET_DEPLOYMENT=$(vercel list --token="$VERCEL_TOKEN" --limit=1 2>/dev/null | tail -1 | awk '{print $1}')
+          fi
           
-          # Get the latest deployment URL and promote it
-          LATEST_DEPLOYMENT=$(vercel list --token="$VERCEL_TOKEN" --limit=1 2>/dev/null | tail -1 | awk '{print $1}')
-          
-          if [ -n "$LATEST_DEPLOYMENT" ]; then
-            # Promote using vercel alias or by redeploying with --prod
-            PROD_URL=$(vercel promote "$LATEST_DEPLOYMENT" --token="$VERCEL_TOKEN" 2>&1 || vercel --prod --token="$VERCEL_TOKEN")
+          if [ -n "$TARGET_DEPLOYMENT" ]; then
+            echo "Promoting $TARGET_DEPLOYMENT to production..."
+            # Promote using vercel promote command
+            PROD_URL=$(vercel promote "$TARGET_DEPLOYMENT" --token="$VERCEL_TOKEN" 2>&1) || {
+              echo "vercel promote failed, trying alternative method..."
+              # Alternative: deploy with --prod flag
+              PROD_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" 2>&1) || {
+                echo "::error::Failed to promote deployment"
+                exit 1
+              }
+            }
             {
               echo "url=$PROD_URL"
               echo "status=promoted"
             } >> "$GITHUB_OUTPUT"
             echo "✅ Promoted to production: $PROD_URL"
           else
-            echo "::error::No deployment found to promote"
+            echo "::error::No deployment found to promote. Pass vercel-deployment-url from the preview step."
             exit 1
           fi
 
