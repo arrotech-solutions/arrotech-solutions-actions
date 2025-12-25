@@ -178,17 +178,21 @@ jobs:
     steps:
       - name: Validate inputs
         id: validate
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          PLATFORM: ${{ inputs.platform }}
+          DRY_RUN: ${{ inputs.dry-run }}
         run: |
-          echo "Environment: ${{ inputs.environment }}"
-          echo "Platform: ${{ inputs.platform }}"
-          echo "Dry run: ${{ inputs.dry-run }}"
+          echo "Environment: $ENVIRONMENT"
+          echo "Platform: $PLATFORM"
+          echo "Dry run: $DRY_RUN"
           
           # Production deployment warnings
-          if [ "${{ inputs.environment }}" = "production" ]; then
+          if [ "$ENVIRONMENT" = "production" ]; then
             echo "::warning::Production deployment detected. Ensure all approvals are in place."
           fi
           
-          echo "proceed=true" >> $GITHUB_OUTPUT
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # Kubernetes Deployment
@@ -226,20 +230,28 @@ jobs:
       - name: Deploy with Helm
         id: helm-deploy
         if: inputs.helm-chart-path != ''
+        env:
+          DEPLOYMENT_NAME: ${{ inputs.deployment-name || github.event.repository.name }}
+          CHART_PATH: ${{ inputs.helm-chart-path }}
+          NAMESPACE: ${{ inputs.namespace }}
+          IMAGE: ${{ inputs.image }}
+          VALUES_FILE: ${{ inputs.helm-values-file }}
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+          ROLLOUT_TIMEOUT: ${{ inputs.rollout-timeout }}
         run: |
-          HELM_ARGS="upgrade --install ${{ inputs.deployment-name || github.event.repository.name }} ${{ inputs.helm-chart-path }}"
-          HELM_ARGS="$HELM_ARGS --namespace ${{ inputs.namespace }}"
-          HELM_ARGS="$HELM_ARGS --set image=${{ inputs.image }}"
+          HELM_ARGS="upgrade --install $DEPLOYMENT_NAME $CHART_PATH"
+          HELM_ARGS="$HELM_ARGS --namespace $NAMESPACE"
+          HELM_ARGS="$HELM_ARGS --set image=$IMAGE"
           
-          if [ -n "${{ inputs.helm-values-file }}" ]; then
-            HELM_ARGS="$HELM_ARGS -f ${{ inputs.helm-values-file }}"
+          if [ -n "$VALUES_FILE" ]; then
+            HELM_ARGS="$HELM_ARGS -f $VALUES_FILE"
           fi
           
-          if [ "${{ inputs.dry-run }}" = "true" ]; then
+          if [ "$DRY_RUN_MODE" = "true" ]; then
             HELM_ARGS="$HELM_ARGS --dry-run"
           fi
           
-          helm $HELM_ARGS --wait --timeout ${{ inputs.rollout-timeout }}s
+          helm $HELM_ARGS --wait --timeout "${ROLLOUT_TIMEOUT}s"
 
       - name: Deploy with kubectl
         id: kubectl-deploy
@@ -266,36 +278,47 @@ jobs:
       - name: Update deployment image
         id: deploy
         if: inputs.deployment-name != '' && inputs.helm-chart-path == '' && inputs.kubectl-manifest-path == ''
+        env:
+          DEPLOYMENT_NAME: ${{ inputs.deployment-name }}
+          IMAGE: ${{ inputs.image }}
+          NAMESPACE: ${{ inputs.namespace }}
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
         run: |
           DRY_RUN=""
-          if [ "${{ inputs.dry-run }}" = "true" ]; then
+          if [ "$DRY_RUN_MODE" = "true" ]; then
             DRY_RUN="--dry-run=client"
           fi
           
-          kubectl set image deployment/${{ inputs.deployment-name }} \
-            ${{ inputs.deployment-name }}=${{ inputs.image }} \
-            -n ${{ inputs.namespace }} $DRY_RUN
+          kubectl set image "deployment/$DEPLOYMENT_NAME" \
+            "$DEPLOYMENT_NAME=$IMAGE" \
+            -n "$NAMESPACE" $DRY_RUN
           
-          echo "status=initiated" >> $GITHUB_OUTPUT
+          echo "status=initiated" >> "$GITHUB_OUTPUT"
 
       - name: Wait for rollout
         if: inputs.wait-for-rollout && !inputs.dry-run
+        env:
+          DEPLOYMENT_NAME: ${{ inputs.deployment-name || github.event.repository.name }}
+          NAMESPACE: ${{ inputs.namespace }}
+          ROLLOUT_TIMEOUT: ${{ inputs.rollout-timeout }}
         run: |
-          kubectl rollout status deployment/${{ inputs.deployment-name || github.event.repository.name }} \
-            -n ${{ inputs.namespace }} \
-            --timeout=${{ inputs.rollout-timeout }}s
+          kubectl rollout status "deployment/$DEPLOYMENT_NAME" \
+            -n "$NAMESPACE" \
+            --timeout="${ROLLOUT_TIMEOUT}s"
           
-          echo "status=completed" >> $GITHUB_OUTPUT
+          echo "status=completed" >> "$GITHUB_OUTPUT"
 
       - name: Get service URL
         if: "!inputs.dry-run"
         id: get-url
+        env:
+          SERVICE_NAME: ${{ inputs.deployment-name || github.event.repository.name }}
+          NAMESPACE: ${{ inputs.namespace }}
         run: |
-          SERVICE_NAME="${{ inputs.deployment-name || github.event.repository.name }}"
-          URL=$(kubectl get svc $SERVICE_NAME -n ${{ inputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || \
-                kubectl get svc $SERVICE_NAME -n ${{ inputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || \
+          URL=$(kubectl get svc "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || \
+                kubectl get svc "$SERVICE_NAME" -n "$NAMESPACE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || \
                 echo "")
-          echo "url=$URL" >> $GITHUB_OUTPUT
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # AWS ECS Deployment
@@ -323,42 +346,53 @@ jobs:
       - name: Update ECS task definition
         id: task-def
         if: inputs.ecs-task-definition != ''
+        env:
+          TASK_DEF_FILE: ${{ inputs.ecs-task-definition }}
+          IMAGE: ${{ inputs.image }}
         run: |
           # Update image in task definition
-          TASK_DEF=$(cat ${{ inputs.ecs-task-definition }})
-          TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "${{ inputs.image }}" '.containerDefinitions[0].image = $IMAGE')
-          echo $TASK_DEF > task-definition-updated.json
+          TASK_DEF=$(cat "$TASK_DEF_FILE")
+          TASK_DEF=$(echo "$TASK_DEF" | jq --arg IMAGE "$IMAGE" '.containerDefinitions[0].image = $IMAGE')
+          echo "$TASK_DEF" > task-definition-updated.json
           
           # Register new task definition
           NEW_TASK_DEF=$(aws ecs register-task-definition --cli-input-json file://task-definition-updated.json)
-          TASK_DEF_ARN=$(echo $NEW_TASK_DEF | jq -r '.taskDefinition.taskDefinitionArn')
-          echo "task-def-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+          TASK_DEF_ARN=$(echo "$NEW_TASK_DEF" | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "task-def-arn=$TASK_DEF_ARN" >> "$GITHUB_OUTPUT"
 
       - name: Deploy to ECS
         id: deploy
+        env:
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+          ECS_CLUSTER: ${{ inputs.ecs-cluster }}
+          ECS_SERVICE: ${{ inputs.ecs-service }}
+          TASK_DEF_ARN: ${{ steps.task-def.outputs.task-def-arn || inputs.ecs-task-definition }}
         run: |
-          if [ "${{ inputs.dry-run }}" = "true" ]; then
-            echo "Dry run - would deploy to ECS cluster ${{ inputs.ecs-cluster }}"
-            echo "status=dry-run" >> $GITHUB_OUTPUT
+          if [ "$DRY_RUN_MODE" = "true" ]; then
+            echo "Dry run - would deploy to ECS cluster $ECS_CLUSTER"
+            echo "status=dry-run" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           
           aws ecs update-service \
-            --cluster ${{ inputs.ecs-cluster }} \
-            --service ${{ inputs.ecs-service }} \
-            --task-definition ${{ steps.task-def.outputs.task-def-arn || inputs.ecs-task-definition }} \
+            --cluster "$ECS_CLUSTER" \
+            --service "$ECS_SERVICE" \
+            --task-definition "$TASK_DEF_ARN" \
             --force-new-deployment
           
-          echo "status=initiated" >> $GITHUB_OUTPUT
+          echo "status=initiated" >> "$GITHUB_OUTPUT"
 
       - name: Wait for deployment
         if: inputs.wait-for-rollout && !inputs.dry-run
+        env:
+          ECS_CLUSTER: ${{ inputs.ecs-cluster }}
+          ECS_SERVICE: ${{ inputs.ecs-service }}
         run: |
           aws ecs wait services-stable \
-            --cluster ${{ inputs.ecs-cluster }} \
-            --services ${{ inputs.ecs-service }}
+            --cluster "$ECS_CLUSTER" \
+            --services "$ECS_SERVICE"
           
-          echo "status=completed" >> $GITHUB_OUTPUT
+          echo "status=completed" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # Vercel Deployment
@@ -389,23 +423,33 @@ jobs:
         run: npm install -g vercel@latest
 
       - name: Pull Vercel environment
-        run: vercel pull --yes --environment=${{ inputs.environment }} --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          ENVIRONMENT: ${{ inputs.environment }}
+        run: vercel pull --yes --environment="$ENVIRONMENT" --token="$VERCEL_TOKEN"
 
       - name: Build project
-        run: vercel build ${{ inputs.environment == 'production' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }}
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PROD_FLAG: ${{ inputs.environment == 'production' && '--prod' || '' }}
+        run: vercel build $PROD_FLAG --token="$VERCEL_TOKEN"
 
       - name: Deploy to Vercel
         id: deploy
+        env:
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          PROD_FLAG: ${{ inputs.environment == 'production' && '--prod' || '' }}
         run: |
-          if [ "${{ inputs.dry-run }}" = "true" ]; then
+          if [ "$DRY_RUN_MODE" = "true" ]; then
             echo "Dry run - would deploy to Vercel"
-            echo "status=dry-run" >> $GITHUB_OUTPUT
+            echo "status=dry-run" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           
-          DEPLOY_URL=$(vercel deploy --prebuilt ${{ inputs.environment == 'production' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }})
-          echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
-          echo "status=completed" >> $GITHUB_OUTPUT
+          DEPLOY_URL=$(vercel deploy --prebuilt $PROD_FLAG --token="$VERCEL_TOKEN")
+          echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
+          echo "status=completed" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # Netlify Deployment
@@ -454,8 +498,10 @@ jobs:
       - name: Set deployment status
         id: set-status
         if: always()
+        env:
+          DEPLOY_OUTCOME: ${{ steps.deploy.outcome }}
         run: |
-          if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+          if [ "$DEPLOY_OUTCOME" = "success" ]; then
             echo "status=completed" >> "$GITHUB_OUTPUT"
           else
             echo "status=failed" >> "$GITHUB_OUTPUT"
@@ -481,18 +527,26 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup SSH
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_HOST: ${{ inputs.ssh-host }}
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H ${{ inputs.ssh-host }} >> ~/.ssh/known_hosts
+          ssh-keyscan -H "$SSH_HOST" >> ~/.ssh/known_hosts
 
       - name: Deploy via SSH
         id: deploy
+        env:
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+          SSH_HOST: ${{ inputs.ssh-host }}
+          SSH_USER: ${{ inputs.ssh-user }}
+          DEPLOY_PATH: ${{ inputs.deploy-path }}
         run: |
-          if [ "${{ inputs.dry-run }}" = "true" ]; then
-            echo "Dry run - would deploy via SSH to ${{ inputs.ssh-host }}"
-            echo "status=dry-run" >> $GITHUB_OUTPUT
+          if [ "$DRY_RUN_MODE" = "true" ]; then
+            echo "Dry run - would deploy via SSH to $SSH_HOST"
+            echo "status=dry-run" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           
@@ -502,12 +556,12 @@ jobs:
             --exclude '.git' \
             --exclude 'node_modules' \
             --exclude '.env*' \
-            ./ ${{ inputs.ssh-user }}@${{ inputs.ssh-host }}:${{ inputs.deploy-path }}/
+            ./ "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/"
           
           # Restart application (customize based on your setup)
-          ssh -i ~/.ssh/deploy_key ${{ inputs.ssh-user }}@${{ inputs.ssh-host }} "cd ${{ inputs.deploy-path }} && ./deploy.sh" || true
+          ssh -i ~/.ssh/deploy_key "${SSH_USER}@${SSH_HOST}" "cd $DEPLOY_PATH && ./deploy.sh" || true
           
-          echo "status=completed" >> $GITHUB_OUTPUT
+          echo "status=completed" >> "$GITHUB_OUTPUT"
 
   # ---------------------------------------------------------------------------
   # Summary

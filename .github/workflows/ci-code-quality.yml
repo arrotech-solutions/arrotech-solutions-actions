@@ -92,9 +92,12 @@ jobs:
 
       - name: Run ESLint
         id: lint
+        env:
+          ESLINT_ARGS: ${{ inputs.eslint-args }}
+          FAIL_ON_WARNINGS: ${{ inputs.fail-on-warnings }}
         run: |
-          ARGS="${{ inputs.eslint-args }}"
-          if [ "${{ inputs.fail-on-warnings }}" = "true" ]; then
+          ARGS="$ESLINT_ARGS"
+          if [ "$FAIL_ON_WARNINGS" = "true" ]; then
             ARGS="$ARGS --max-warnings=0"
           fi
           npx eslint . $ARGS --format stylish
@@ -203,11 +206,11 @@ jobs:
     steps:
       - name: Evaluate results
         id: summary
+        env:
+          NODE_RESULT: ${{ needs.lint-node.result }}
+          PYTHON_RESULT: ${{ needs.lint-python.result }}
+          GO_RESULT: ${{ needs.lint-go.result }}
         run: |
-          NODE_RESULT="${{ needs.lint-node.result }}"
-          PYTHON_RESULT="${{ needs.lint-python.result }}"
-          GO_RESULT="${{ needs.lint-go.result }}"
-          
           echo "Node.js lint: $NODE_RESULT"
           echo "Python lint: $PYTHON_RESULT"
           echo "Go lint: $GO_RESULT"
@@ -216,9 +219,9 @@ jobs:
           if [[ "$NODE_RESULT" == "failure" ]] || \
              [[ "$PYTHON_RESULT" == "failure" ]] || \
              [[ "$GO_RESULT" == "failure" ]]; then
-            echo "result=failed" >> $GITHUB_OUTPUT
+            echo "result=failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           
-          echo "result=passed" >> $GITHUB_OUTPUT
+          echo "result=passed" >> "$GITHUB_OUTPUT"
 

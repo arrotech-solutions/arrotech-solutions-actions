@@ -1,0 +1,17 @@
+# actionlint configuration
+# https://github.com/rhysd/actionlint/blob/main/docs/config.md
+
+# Self-hosted runner labels (if using custom runners)
+self-hosted-runner:
+  labels: []
+
+# Custom configuration variables
+config-variables: []
+
+# Shellcheck integration settings
+# Only report warning and error level issues (suppress info-level SC2086)
+shellcheck:
+  # Minimum severity to report: error, warning, info, style
+  # Setting to 'warning' suppresses info-level suggestions like SC2086
+  severity: warning
+

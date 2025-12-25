@@ -134,17 +134,20 @@ jobs:
       - name: Run coverage
         id: coverage
         if: inputs.coverage-threshold > 0
+        env:
+          COVERAGE_COMMAND: ${{ inputs.coverage-command }}
+          COVERAGE_THRESHOLD: ${{ inputs.coverage-threshold }}
         run: |
-          if [ -n "${{ inputs.coverage-command }}" ]; then
-            ${{ inputs.coverage-command }}
+          if [ -n "$COVERAGE_COMMAND" ]; then
+            $COVERAGE_COMMAND
           else
             # Parse coverage from Jest output or coverage-summary.json
             if [ -f "coverage/coverage-summary.json" ]; then
               COVERAGE=$(jq '.total.lines.pct' coverage/coverage-summary.json)
-              echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+              echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
               
-              if (( $(echo "$COVERAGE < ${{ inputs.coverage-threshold }}" | bc -l) )); then
-                echo "::error::Coverage $COVERAGE% is below threshold ${{ inputs.coverage-threshold }}%"
+              if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+                echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
                 exit 1
               fi
             fi
@@ -161,15 +164,16 @@ jobs:
 
       - name: Run integration tests
         if: inputs.run-integration-tests
-        run: |
-          if [ -n "${{ inputs.integration-test-command }}" ]; then
-            ${{ inputs.integration-test-command }}
-          else
-            npm run test:integration || echo "No integration test script found"
-          fi
         env:
           CI: true
           NODE_ENV: test
+          INTEGRATION_TEST_COMMAND: ${{ inputs.integration-test-command }}
+        run: |
+          if [ -n "$INTEGRATION_TEST_COMMAND" ]; then
+            $INTEGRATION_TEST_COMMAND
+          else
+            npm run test:integration || echo "No integration test script found"
+          fi
 
   # ---------------------------------------------------------------------------
   # Python Tests
@@ -204,28 +208,32 @@ jobs:
 
       - name: Run unit tests
         id: test
+        env:
+          PYTHONPATH: ${{ inputs.working-directory }}
+          TEST_COMMAND: ${{ inputs.test-command }}
+          PARALLEL_TESTS: ${{ inputs.parallel-tests }}
         run: |
-          if [ -n "${{ inputs.test-command }}" ]; then
-            ${{ inputs.test-command }}
+          if [ -n "$TEST_COMMAND" ]; then
+            $TEST_COMMAND
           else
             PYTEST_ARGS=""
-            if [ "${{ inputs.parallel-tests }}" = "true" ]; then
+            if [ "$PARALLEL_TESTS" = "true" ]; then
               PYTEST_ARGS="$PYTEST_ARGS -n auto"
             fi
             pytest $PYTEST_ARGS --cov=. --cov-report=xml --cov-report=term-missing -v
           fi
-        env:
-          PYTHONPATH: ${{ inputs.working-directory }}
 
       - name: Check coverage threshold
         id: coverage
         if: inputs.coverage-threshold > 0
+        env:
+          COVERAGE_THRESHOLD: ${{ inputs.coverage-threshold }}
         run: |
           COVERAGE=$(python -c "import xml.etree.ElementTree as ET; tree = ET.parse('coverage.xml'); print(float(tree.getroot().get('line-rate')) * 100)")
-          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
           
-          if (( $(echo "$COVERAGE < ${{ inputs.coverage-threshold }}" | bc -l) )); then
-            echo "::error::Coverage $COVERAGE% is below threshold ${{ inputs.coverage-threshold }}%"
+          if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
             exit 1
           fi
 
@@ -241,9 +249,11 @@ jobs:
 
       - name: Run integration tests
         if: inputs.run-integration-tests
+        env:
+          INTEGRATION_TEST_COMMAND: ${{ inputs.integration-test-command }}
         run: |
-          if [ -n "${{ inputs.integration-test-command }}" ]; then
-            ${{ inputs.integration-test-command }}
+          if [ -n "$INTEGRATION_TEST_COMMAND" ]; then
+            $INTEGRATION_TEST_COMMAND
           else
             pytest tests/integration/ -v || echo "No integration tests found"
           fi
@@ -276,9 +286,11 @@ jobs:
 
       - name: Run unit tests
         id: test
+        env:
+          TEST_COMMAND: ${{ inputs.test-command }}
         run: |
-          if [ -n "${{ inputs.test-command }}" ]; then
-            ${{ inputs.test-command }}
+          if [ -n "$TEST_COMMAND" ]; then
+            $TEST_COMMAND
           else
             go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
           fi
@@ -286,12 +298,14 @@ jobs:
       - name: Check coverage threshold
         id: coverage
         if: inputs.coverage-threshold > 0
+        env:
+          COVERAGE_THRESHOLD: ${{ inputs.coverage-threshold }}
         run: |
           COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}' | sed 's/%//')
-          echo "percentage=$COVERAGE" >> $GITHUB_OUTPUT
+          echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
           
-          if (( $(echo "$COVERAGE < ${{ inputs.coverage-threshold }}" | bc -l) )); then
-            echo "::error::Coverage $COVERAGE% is below threshold ${{ inputs.coverage-threshold }}%"
+          if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
             exit 1
           fi
 
@@ -305,9 +319,11 @@ jobs:
 
       - name: Run integration tests
         if: inputs.run-integration-tests
+        env:
+          INTEGRATION_TEST_COMMAND: ${{ inputs.integration-test-command }}
         run: |
-          if [ -n "${{ inputs.integration-test-command }}" ]; then
-            ${{ inputs.integration-test-command }}
+          if [ -n "$INTEGRATION_TEST_COMMAND" ]; then
+            $INTEGRATION_TEST_COMMAND
           else
             go test -v -tags=integration ./...
           fi
@@ -326,15 +342,14 @@ jobs:
     steps:
       - name: Aggregate results
         id: summary
+        env:
+          NODE: ${{ needs.test-node.result }}
+          PYTHON: ${{ needs.test-python.result }}
+          GO: ${{ needs.test-go.result }}
+          NODE_COV: ${{ needs.test-node.outputs.coverage }}
+          PYTHON_COV: ${{ needs.test-python.outputs.coverage }}
+          GO_COV: ${{ needs.test-go.outputs.coverage }}
         run: |
-          NODE="${{ needs.test-node.result }}"
-          PYTHON="${{ needs.test-python.result }}"
-          GO="${{ needs.test-go.result }}"
-          
-          NODE_COV="${{ needs.test-node.outputs.coverage }}"
-          PYTHON_COV="${{ needs.test-python.outputs.coverage }}"
-          GO_COV="${{ needs.test-go.outputs.coverage }}"
-          
           echo "::group::Test Results"
           echo "Node.js: $NODE (coverage: $NODE_COV%)"
           echo "Python: $PYTHON (coverage: $PYTHON_COV%)"
@@ -342,17 +357,17 @@ jobs:
           echo "::endgroup::"
           
           # Set coverage output
-          if [ -n "$NODE_COV" ]; then echo "coverage=$NODE_COV" >> $GITHUB_OUTPUT; fi
-          if [ -n "$PYTHON_COV" ]; then echo "coverage=$PYTHON_COV" >> $GITHUB_OUTPUT; fi
-          if [ -n "$GO_COV" ]; then echo "coverage=$GO_COV" >> $GITHUB_OUTPUT; fi
+          if [ -n "$NODE_COV" ]; then echo "coverage=$NODE_COV" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$PYTHON_COV" ]; then echo "coverage=$PYTHON_COV" >> "$GITHUB_OUTPUT"; fi
+          if [ -n "$GO_COV" ]; then echo "coverage=$GO_COV" >> "$GITHUB_OUTPUT"; fi
           
           # Check for failures
           if [[ "$NODE" == "failure" ]] || \
              [[ "$PYTHON" == "failure" ]] || \
              [[ "$GO" == "failure" ]]; then
-            echo "result=failed" >> $GITHUB_OUTPUT
+            echo "result=failed" >> "$GITHUB_OUTPUT"
             exit 1
           fi
           
-          echo "result=passed" >> $GITHUB_OUTPUT
+          echo "result=passed" >> "$GITHUB_OUTPUT"
 

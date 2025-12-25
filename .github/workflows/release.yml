@@ -129,14 +129,18 @@ jobs:
             VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo "0.0.0")
           fi
           
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Current version: $VERSION"
 
       - name: Calculate next version
         id: version
+        env:
+          CURRENT: ${{ steps.current-version.outputs.version }}
+          RELEASE_TYPE_INPUT: ${{ inputs.release-type }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          PRERELEASE_TAG_INPUT: ${{ inputs.prerelease-tag }}
         run: |
-          CURRENT="${{ steps.current-version.outputs.version }}"
-          RELEASE_TYPE="${{ inputs.release-type }}"
+          RELEASE_TYPE="$RELEASE_TYPE_INPUT"
           
           # Parse current version
           MAJOR=$(echo "$CURRENT" | cut -d. -f1)
@@ -145,7 +149,8 @@ jobs:
           
           if [ "$RELEASE_TYPE" = "auto" ]; then
             # Analyze commits to determine version bump
-            COMMITS=$(git log $(git describe --tags --abbrev=0 2>/dev/null || echo "HEAD~100")..HEAD --pretty=format:"%s")
+            LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "HEAD~100")
+            COMMITS=$(git log "${LAST_TAG}..HEAD" --pretty=format:"%s")
             
             if echo "$COMMITS" | grep -qE "^(feat|feature)!:|BREAKING CHANGE"; then
               RELEASE_TYPE="major"
@@ -176,21 +181,21 @@ jobs:
           esac
           
           # Add prerelease tag if needed
-          if [ "${{ inputs.prerelease }}" = "true" ]; then
+          if [ "$IS_PRERELEASE" = "true" ]; then
             # Find next prerelease number
-            PRERELEASE_TAG="${{ inputs.prerelease-tag }}"
-            EXISTING=$(git tag -l "v${NEW_VERSION}-${PRERELEASE_TAG}.*" | wc -l)
-            NEW_VERSION="${NEW_VERSION}-${PRERELEASE_TAG}.$((EXISTING + 1))"
+            EXISTING=$(git tag -l "v${NEW_VERSION}-${PRERELEASE_TAG_INPUT}.*" | wc -l)
+            NEW_VERSION="${NEW_VERSION}-${PRERELEASE_TAG_INPUT}.$((EXISTING + 1))"
           fi
           
-          echo "new-version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "new-version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
           echo "New version: $NEW_VERSION"
 
       - name: Generate changelog
         id: changelog
         if: inputs.generate-changelog
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new-version }}
         run: |
-          NEW_VERSION="${{ steps.version.outputs.new-version }}"
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           
           if [ -n "$LAST_TAG" ]; then
@@ -203,10 +208,10 @@ jobs:
           CHANGELOG="## What's Changed in v$NEW_VERSION\n\n"
           
           # Group by type
-          FEATURES=$(git log $RANGE --pretty=format:"- %s (%h)" --grep="^feat" || true)
-          FIXES=$(git log $RANGE --pretty=format:"- %s (%h)" --grep="^fix" || true)
-          DOCS=$(git log $RANGE --pretty=format:"- %s (%h)" --grep="^docs" || true)
-          OTHERS=$(git log $RANGE --pretty=format:"- %s (%h)" --grep="^chore\|^refactor\|^perf\|^style\|^test\|^ci" || true)
+          FEATURES=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^feat" || true)
+          FIXES=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^fix" || true)
+          DOCS=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^docs" || true)
+          OTHERS=$(git log "$RANGE" --pretty=format:"- %s (%h)" --grep="^chore\|^refactor\|^perf\|^style\|^test\|^ci" || true)
           
           if [ -n "$FEATURES" ]; then
             CHANGELOG="$CHANGELOG### 🚀 Features\n$FEATURES\n\n"
@@ -225,22 +230,24 @@ jobs:
           fi
           
           # Add contributors
-          CONTRIBUTORS=$(git log $RANGE --pretty=format:"%an" | sort -u | tr '\n' ', ' | sed 's/,$//')
+          CONTRIBUTORS=$(git log "$RANGE" --pretty=format:"%an" | sort -u | tr '\n' ', ' | sed 's/,$//')
           CHANGELOG="$CHANGELOG### 👥 Contributors\n$CONTRIBUTORS\n"
           
           # Save to file
           echo -e "$CHANGELOG" > RELEASE_NOTES.md
           
           # Output for use in release
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          {
+            echo "content<<EOF"
+            echo -e "$CHANGELOG"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Update package version (Node.js)
         if: inputs.update-package-version
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new-version }}
         run: |
-          NEW_VERSION="${{ steps.version.outputs.new-version }}"
-          
           if [ -f "package.json" ]; then
             npm version "$NEW_VERSION" --no-git-tag-version --allow-same-version
             git add package.json package-lock.json 2>/dev/null || true
@@ -248,9 +255,9 @@ jobs:
 
       - name: Update package version (Python)
         if: inputs.update-package-version
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new-version }}
         run: |
-          NEW_VERSION="${{ steps.version.outputs.new-version }}"
-          
           if [ -f "pyproject.toml" ]; then
             sed -i "s/^version = .*/version = \"$NEW_VERSION\"/" pyproject.toml
             git add pyproject.toml
@@ -258,14 +265,16 @@ jobs:
 
       - name: Commit version bump
         if: inputs.update-package-version
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new-version }}
         run: |
-          NEW_VERSION="${{ steps.version.outputs.new-version }}"
           git commit -m "chore(release): v$NEW_VERSION" --allow-empty
           git push
 
       - name: Create and push tag
+        env:
+          NEW_VERSION: ${{ steps.version.outputs.new-version }}
         run: |
-          NEW_VERSION="${{ steps.version.outputs.new-version }}"
           git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
           git push origin "v$NEW_VERSION"
 
