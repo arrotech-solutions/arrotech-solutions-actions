@@ -129,7 +129,18 @@ jobs:
           if [ -n "$TEST_COMMAND" ]; then
             eval "$TEST_COMMAND"
           else
-            npm test -- --coverage --watchAll=false
+            # Detect test framework and use appropriate flags
+            if grep -q '"vitest"' package.json 2>/dev/null; then
+              echo "Detected Vitest - running with Vitest flags"
+              npm test -- --run
+            elif grep -q '"jest"' package.json 2>/dev/null; then
+              echo "Detected Jest - running with Jest flags"
+              npm test -- --coverage --watchAll=false
+            else
+              # Generic fallback - just run npm test
+              echo "Running npm test"
+              npm test
+            fi
           fi
 
       - name: Run coverage
@@ -142,7 +153,7 @@ jobs:
           if [ -n "$COVERAGE_COMMAND" ]; then
             eval "$COVERAGE_COMMAND"
           elif [ -f "coverage/coverage-summary.json" ]; then
-            # Parse coverage from Jest output
+            # Parse coverage from Jest/Vitest JSON output
             COVERAGE=$(jq '.total.lines.pct' coverage/coverage-summary.json)
             echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
             
@@ -150,8 +161,17 @@ jobs:
               echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
               exit 1
             fi
+          elif [ -f "coverage/lcov.info" ]; then
+            # Parse coverage from lcov format (Vitest default)
+            COVERAGE=$(awk -F: '/LF:/{lf+=$2} /LH:/{lh+=$2} END{if(lf>0) printf "%.2f", (lh/lf)*100; else print "0"}' coverage/lcov.info)
+            echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
+            
+            if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+              echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
+              exit 1
+            fi
           else
-            echo "No coverage data found"
+            echo "No coverage data found - ensure coverage is configured in your test setup"
           fi
         continue-on-error: false
 
