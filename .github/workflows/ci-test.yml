@@ -121,15 +121,16 @@ jobs:
 
       - name: Run unit tests
         id: test
-        run: |
-          if [ -n "${{ inputs.test-command }}" ]; then
-            ${{ inputs.test-command }}
-          else
-            npm test -- --coverage --watchAll=false
-          fi
         env:
           CI: true
           NODE_ENV: test
+          TEST_COMMAND: ${{ inputs.test-command }}
+        run: |
+          if [ -n "$TEST_COMMAND" ]; then
+            eval "$TEST_COMMAND"
+          else
+            npm test -- --coverage --watchAll=false
+          fi
 
       - name: Run coverage
         id: coverage
@@ -139,18 +140,18 @@ jobs:
           COVERAGE_THRESHOLD: ${{ inputs.coverage-threshold }}
         run: |
           if [ -n "$COVERAGE_COMMAND" ]; then
-            $COVERAGE_COMMAND
-          else
-            # Parse coverage from Jest output or coverage-summary.json
-            if [ -f "coverage/coverage-summary.json" ]; then
-              COVERAGE=$(jq '.total.lines.pct' coverage/coverage-summary.json)
-              echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
-              
-              if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
-                echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
-                exit 1
-              fi
+            eval "$COVERAGE_COMMAND"
+          elif [ -f "coverage/coverage-summary.json" ]; then
+            # Parse coverage from Jest output
+            COVERAGE=$(jq '.total.lines.pct' coverage/coverage-summary.json)
+            echo "percentage=$COVERAGE" >> "$GITHUB_OUTPUT"
+            
+            if (( $(echo "$COVERAGE < $COVERAGE_THRESHOLD" | bc -l) )); then
+              echo "::error::Coverage $COVERAGE% is below threshold $COVERAGE_THRESHOLD%"
+              exit 1
             fi
+          else
+            echo "No coverage data found"
           fi
         continue-on-error: false
 
@@ -170,7 +171,7 @@ jobs:
           INTEGRATION_TEST_COMMAND: ${{ inputs.integration-test-command }}
         run: |
           if [ -n "$INTEGRATION_TEST_COMMAND" ]; then
-            $INTEGRATION_TEST_COMMAND
+            eval "$INTEGRATION_TEST_COMMAND"
           else
             npm run test:integration || echo "No integration test script found"
           fi
@@ -214,7 +215,7 @@ jobs:
           PARALLEL_TESTS: ${{ inputs.parallel-tests }}
         run: |
           if [ -n "$TEST_COMMAND" ]; then
-            $TEST_COMMAND
+            eval "$TEST_COMMAND"
           elif [ "$PARALLEL_TESTS" = "true" ]; then
             pytest -n auto --cov=. --cov-report=xml --cov-report=term-missing -v
           else
@@ -251,7 +252,7 @@ jobs:
           INTEGRATION_TEST_COMMAND: ${{ inputs.integration-test-command }}
         run: |
           if [ -n "$INTEGRATION_TEST_COMMAND" ]; then
-            $INTEGRATION_TEST_COMMAND
+            eval "$INTEGRATION_TEST_COMMAND"
           else
             pytest tests/integration/ -v || echo "No integration tests found"
           fi
@@ -288,7 +289,7 @@ jobs:
           TEST_COMMAND: ${{ inputs.test-command }}
         run: |
           if [ -n "$TEST_COMMAND" ]; then
-            $TEST_COMMAND
+            eval "$TEST_COMMAND"
           else
             go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
           fi
@@ -321,7 +322,7 @@ jobs:
           INTEGRATION_TEST_COMMAND: ${{ inputs.integration-test-command }}
         run: |
           if [ -n "$INTEGRATION_TEST_COMMAND" ]; then
-            $INTEGRATION_TEST_COMMAND
+            eval "$INTEGRATION_TEST_COMMAND"
           else
             go test -v -tags=integration ./...
           fi

@@ -539,9 +539,11 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies and build
+        env:
+          BUILD_COMMAND: ${{ inputs.build-command }}
         run: |
           npm ci
-          ${{ inputs.build-command }}
+          eval "$BUILD_COMMAND"
 
       - name: Deploy to Netlify
         id: deploy
