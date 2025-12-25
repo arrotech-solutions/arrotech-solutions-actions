@@ -153,7 +153,7 @@ jobs:
 
       - name: Upload coverage report
         if: inputs.upload-coverage && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report-node
           path: ${{ inputs.working-directory }}/coverage/
@@ -231,7 +231,7 @@ jobs:
 
       - name: Upload coverage report
         if: inputs.upload-coverage && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report-python
           path: |
@@ -297,7 +297,7 @@ jobs:
 
       - name: Upload coverage report
         if: inputs.upload-coverage && always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coverage-report-go
           path: ${{ inputs.working-directory }}/coverage.out
