@@ -417,8 +417,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
     outputs:
-      url: ${{ steps.deploy.outputs.url }}
-      status: ${{ steps.deploy.outputs.status }}
+      url: ${{ steps.deploy.outputs.deploy-url }}
+      status: ${{ steps.set-status.outputs.status }}
     defaults:
       run:
         working-directory: ${{ inputs.working-directory }}
@@ -450,6 +450,16 @@ jobs:
         env:
           NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
           NETLIFY_SITE_ID: ${{ inputs.project-name }}
+
+      - name: Set deployment status
+        id: set-status
+        if: always()
+        run: |
+          if [ "${{ steps.deploy.outcome }}" = "success" ]; then
+            echo "status=completed" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          fi
 
   # ---------------------------------------------------------------------------
   # SSH Deployment
