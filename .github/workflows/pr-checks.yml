@@ -84,28 +84,31 @@ jobs:
 
       - name: Get PR info
         id: pr-info
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          FILES_CHANGED: ${{ github.event.pull_request.changed_files }}
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
         run: |
-          # Get PR details from GitHub context
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          PR_BODY="${{ github.event.pull_request.body }}"
-          FILES_CHANGED=${{ github.event.pull_request.changed_files }}
-          ADDITIONS=${{ github.event.pull_request.additions }}
-          DELETIONS=${{ github.event.pull_request.deletions }}
+          # Get PR details from environment variables (safe from injection)
           TOTAL_CHANGES=$((ADDITIONS + DELETIONS))
           
-          echo "title=$PR_TITLE" >> $GITHUB_OUTPUT
-          echo "files-changed=$FILES_CHANGED" >> $GITHUB_OUTPUT
-          echo "lines-changed=$TOTAL_CHANGES" >> $GITHUB_OUTPUT
+          echo "title=$PR_TITLE" >> "$GITHUB_OUTPUT"
+          echo "files-changed=$FILES_CHANGED" >> "$GITHUB_OUTPUT"
+          echo "lines-changed=$TOTAL_CHANGES" >> "$GITHUB_OUTPUT"
           
-          echo "## PR Statistics" >> $GITHUB_STEP_SUMMARY
-          echo "- Files changed: $FILES_CHANGED" >> $GITHUB_STEP_SUMMARY
-          echo "- Lines added: $ADDITIONS" >> $GITHUB_STEP_SUMMARY
-          echo "- Lines deleted: $DELETIONS" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## PR Statistics"
+            echo "- Files changed: $FILES_CHANGED"
+            echo "- Lines added: $ADDITIONS"
+            echo "- Lines deleted: $DELETIONS"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Check for WIP
         if: inputs.block-wip
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
           if echo "$PR_TITLE" | grep -iE '^\[?WIP\]?|^WIP:|work in progress' > /dev/null; then
             echo "::error::PR appears to be a work in progress (WIP). Please remove WIP from the title when ready."
             exit 1
@@ -113,10 +116,10 @@ jobs:
 
       - name: Validate conventional commits
         if: inputs.require-conventional-commits
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          ALLOWED_TYPES: ${{ inputs.conventional-commit-types }}
         run: |
-          PR_TITLE="${{ github.event.pull_request.title }}"
-          ALLOWED_TYPES="${{ inputs.conventional-commit-types }}"
-          
           # Build regex pattern from allowed types
           TYPES_PATTERN=$(echo "$ALLOWED_TYPES" | tr ',' '|')
           PATTERN="^($TYPES_PATTERN)(\(.+\))?!?: .+"
@@ -188,20 +191,23 @@ jobs:
 
       - name: Check CHANGELOG updates
         if: inputs.require-changelog
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          git diff --name-only origin/${{ github.base_ref }}..HEAD | grep -E '^CHANGELOG\.md$' > /dev/null || {
+          git diff --name-only "origin/${BASE_REF}..HEAD" | grep -E '^CHANGELOG\.md$' > /dev/null || {
             echo "::warning::CHANGELOG.md was not updated. Please document your changes."
           }
 
       - name: Check for test coverage
         if: inputs.require-tests
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           # Get list of changed source files (excluding tests)
           SOURCE_PATTERN="^(src|lib|app)/.*\.(ts|js|py|go)$"
-          TEST_PATTERN="${{ inputs.test-file-pattern }}"
           
-          SOURCE_FILES=$(git diff --name-only origin/${{ github.base_ref }}..HEAD | grep -E "$SOURCE_PATTERN" | grep -vE "(test|spec)" || true)
-          TEST_FILES=$(git diff --name-only origin/${{ github.base_ref }}..HEAD | grep -E "(test|spec)" || true)
+          SOURCE_FILES=$(git diff --name-only "origin/${BASE_REF}..HEAD" | grep -E "$SOURCE_PATTERN" | grep -vE "(test|spec)" || true)
+          TEST_FILES=$(git diff --name-only "origin/${BASE_REF}..HEAD" | grep -E "(test|spec)" || true)
           
           if [ -n "$SOURCE_FILES" ] && [ -z "$TEST_FILES" ]; then
             echo "::warning::Source files were modified but no test files were updated."
@@ -219,8 +225,10 @@ jobs:
           fetch-depth: 0
 
       - name: Validate commit messages
+        env:
+          ALLOWED_TYPES: ${{ inputs.conventional-commit-types }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
-          ALLOWED_TYPES="${{ inputs.conventional-commit-types }}"
           TYPES_PATTERN=$(echo "$ALLOWED_TYPES" | tr ',' '|')
           PATTERN="^($TYPES_PATTERN)(\(.+\))?!?: .+"
           
@@ -233,7 +241,7 @@ jobs:
             if ! echo "$MESSAGE" | grep -E "$PATTERN" > /dev/null; then
               INVALID_COMMITS="$INVALID_COMMITS\n- $HASH: $MESSAGE"
             fi
-          done < <(git log --oneline origin/${{ github.base_ref }}..HEAD)
+          done < <(git log --oneline "origin/${BASE_REF}..HEAD")
           
           if [ -n "$INVALID_COMMITS" ]; then
             echo "::warning::Some commits don't follow conventional commit format:"

@@ -22,7 +22,7 @@ on:
     inputs:
       artifact-type:
         description: 'Artifact type: docker, npm, python, go-binary'
-        required: true
+        required: false
         type: string
         default: 'docker'
       # Docker-specific inputs
@@ -145,7 +145,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      artifact-url: ${{ steps.push.outputs.image-url }}
+      artifact-url: ${{ steps.meta.outputs.tags }}
       version: ${{ steps.meta.outputs.version }}
       digest: ${{ steps.push.outputs.digest }}
     steps:

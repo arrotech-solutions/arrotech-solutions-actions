@@ -272,14 +272,16 @@ jobs:
       - name: Collect release assets
         id: assets
         if: inputs.assets-path != ''
+        env:
+          ASSETS_PATH: ${{ inputs.assets-path }}
         run: |
-          ASSETS=$(ls -1 ${{ inputs.assets-path }} 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
-          echo "files=$ASSETS" >> $GITHUB_OUTPUT
+          ASSETS=$(find "$ASSETS_PATH" -type f 2>/dev/null | tr '\n' ',' | sed 's/,$//' || echo "")
+          echo "files=$ASSETS" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         id: create-release
         if: inputs.create-github-release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ steps.version.outputs.new-version }}
           name: Release v${{ steps.version.outputs.new-version }}
@@ -290,14 +292,21 @@ jobs:
           token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Summary
+        env:
+          VERSION: ${{ steps.version.outputs.new-version }}
+          RELEASE_TYPE: ${{ inputs.release-type }}
+          IS_PRERELEASE: ${{ inputs.prerelease }}
+          IS_DRAFT: ${{ inputs.draft }}
         run: |
-          echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- **Version:** v${{ steps.version.outputs.new-version }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Type:** ${{ inputs.release-type }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Pre-release:** ${{ inputs.prerelease }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Draft:** ${{ inputs.draft }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Changelog" >> $GITHUB_STEP_SUMMARY
-          cat RELEASE_NOTES.md >> $GITHUB_STEP_SUMMARY || true
+          {
+            echo "## 🎉 Release Summary"
+            echo ""
+            echo "- **Version:** v$VERSION"
+            echo "- **Type:** $RELEASE_TYPE"
+            echo "- **Pre-release:** $IS_PRERELEASE"
+            echo "- **Draft:** $IS_DRAFT"
+            echo ""
+            echo "### Changelog"
+            cat RELEASE_NOTES.md || true
+          } >> "$GITHUB_STEP_SUMMARY"
 

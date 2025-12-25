@@ -24,7 +24,7 @@ on:
     inputs:
       language:
         description: 'Primary language for CodeQL: javascript, python, go, java, csharp, cpp, ruby'
-        required: true
+        required: false
         type: string
         default: 'javascript'
       enable-codeql:

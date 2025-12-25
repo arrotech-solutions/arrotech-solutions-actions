@@ -20,7 +20,7 @@ on:
     inputs:
       language:
         description: 'Primary language: node, python, go, or multi'
-        required: true
+        required: false
         type: string
         default: 'node'
       node-version:

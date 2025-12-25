@@ -27,7 +27,7 @@ on:
         type: string
       platform:
         description: 'Deployment platform: kubernetes, ecs, azure-container-apps, vercel, netlify, ssh'
-        required: true
+        required: false
         type: string
         default: 'kubernetes'
       # Container/Image inputs
@@ -244,19 +244,24 @@ jobs:
       - name: Deploy with kubectl
         id: kubectl-deploy
         if: inputs.kubectl-manifest-path != '' && inputs.helm-chart-path == ''
+        env:
+          MANIFEST_PATH: ${{ inputs.kubectl-manifest-path }}
+          IMAGE: ${{ inputs.image }}
+          NAMESPACE: ${{ inputs.namespace }}
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
         run: |
           # Update image in manifests
-          if [ -n "${{ inputs.image }}" ]; then
-            find ${{ inputs.kubectl-manifest-path }} -name "*.yaml" -o -name "*.yml" | \
-              xargs sed -i "s|image:.*|image: ${{ inputs.image }}|g"
+          if [ -n "$IMAGE" ]; then
+            find "$MANIFEST_PATH" \( -name "*.yaml" -o -name "*.yml" \) -exec \
+              sed -i "s|image:.*|image: $IMAGE|g" {} +
           fi
           
           DRY_RUN=""
-          if [ "${{ inputs.dry-run }}" = "true" ]; then
+          if [ "$DRY_RUN_MODE" = "true" ]; then
             DRY_RUN="--dry-run=client"
           fi
           
-          kubectl apply -f ${{ inputs.kubectl-manifest-path }} -n ${{ inputs.namespace }} $DRY_RUN
+          kubectl apply -f "$MANIFEST_PATH" -n "$NAMESPACE" $DRY_RUN
 
       - name: Update deployment image
         id: deploy
@@ -434,7 +439,7 @@ jobs:
 
       - name: Deploy to Netlify
         id: deploy
-        uses: nwtgck/actions-netlify@v2
+        uses: nwtgck/actions-netlify@v3
         with:
           publish-dir: ${{ inputs.output-directory }}
           production-deploy: ${{ inputs.environment == 'production' }}
@@ -507,14 +512,22 @@ jobs:
       status: ${{ needs.deploy-kubernetes.outputs.status || needs.deploy-ecs.outputs.status || needs.deploy-vercel.outputs.status || needs.deploy-netlify.outputs.status || needs.deploy-ssh.outputs.status }}
     steps:
       - name: Deployment summary
+        env:
+          K8S_RESULT: ${{ needs.deploy-kubernetes.result }}
+          ECS_RESULT: ${{ needs.deploy-ecs.result }}
+          VERCEL_RESULT: ${{ needs.deploy-vercel.result }}
+          NETLIFY_RESULT: ${{ needs.deploy-netlify.result }}
+          SSH_RESULT: ${{ needs.deploy-ssh.result }}
         run: |
-          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Kubernetes | ${{ needs.deploy-kubernetes.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| AWS ECS | ${{ needs.deploy-ecs.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Vercel | ${{ needs.deploy-vercel.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Netlify | ${{ needs.deploy-netlify.result }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| SSH | ${{ needs.deploy-ssh.result }} |" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Deployment Summary"
+            echo ""
+            echo "| Platform | Status |"
+            echo "|----------|--------|"
+            echo "| Kubernetes | $K8S_RESULT |"
+            echo "| AWS ECS | $ECS_RESULT |"
+            echo "| Vercel | $VERCEL_RESULT |"
+            echo "| Netlify | $NETLIFY_RESULT |"
+            echo "| SSH | $SSH_RESULT |"
+          } >> "$GITHUB_STEP_SUMMARY"
 
