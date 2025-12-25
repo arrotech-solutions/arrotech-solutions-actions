@@ -565,14 +565,29 @@ jobs:
             exit 0
           fi
           
+          # Helper function to extract URL from Vercel output
+          extract_url() {
+            # Vercel CLI outputs the deployment URL as a line starting with https://
+            grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' | head -1
+          }
+          
           # Determine deployment type
           if [ "$DEPLOY_MODE" = "preview" ]; then
             # Preview mode: always deploy to preview URL, never to production
             echo "Deploying to preview URL..."
             DEPLOY_OUTPUT=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN" 2>&1)
-            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | tail -1)
+            echo "Raw output: $DEPLOY_OUTPUT"
             
-            # Extract deployment ID from URL
+            # Extract just the URL (https://...vercel.app)
+            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | extract_url)
+            
+            if [ -z "$DEPLOY_URL" ]; then
+              echo "::error::Failed to extract deployment URL from Vercel output"
+              echo "Output was: $DEPLOY_OUTPUT"
+              exit 1
+            fi
+            
+            # Extract deployment ID from URL (the subdomain part)
             DEPLOYMENT_ID=$(echo "$DEPLOY_URL" | sed 's|https://||' | cut -d'.' -f1)
             
             {
@@ -584,14 +599,18 @@ jobs:
             
             echo "✅ Preview deployed: $DEPLOY_URL"
             echo "📋 Deployment ID: $DEPLOYMENT_ID"
-            echo ""
-            echo "To promote to production after tests pass, use:"
-            echo "  vercel promote $DEPLOY_URL --token=\$VERCEL_TOKEN"
             
           elif [ "$IS_PRODUCTION" = "true" ]; then
             # Auto mode + production: deploy directly to production
             echo "Deploying to production..."
-            DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+            DEPLOY_OUTPUT=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" 2>&1)
+            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | extract_url)
+            
+            if [ -z "$DEPLOY_URL" ]; then
+              # Fallback: try to get the URL from the last line
+              DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | grep -E '^https://' | tail -1)
+            fi
+            
             {
               echo "url=$DEPLOY_URL"
               echo "status=completed"
@@ -600,7 +619,9 @@ jobs:
           else
             # Auto mode + non-production: deploy to preview
             echo "Deploying to preview (staging/development)..."
-            DEPLOY_URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
+            DEPLOY_OUTPUT=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN" 2>&1)
+            DEPLOY_URL=$(echo "$DEPLOY_OUTPUT" | extract_url)
+            
             {
               echo "url=$DEPLOY_URL"
               echo "preview-url=$DEPLOY_URL"
@@ -622,35 +643,47 @@ jobs:
             exit 0
           fi
           
-          # Use provided deployment URL or try to find the latest
-          if [ -n "$DEPLOYMENT_URL" ]; then
-            echo "Promoting deployment: $DEPLOYMENT_URL"
-            TARGET_DEPLOYMENT="$DEPLOYMENT_URL"
-          else
-            echo "No deployment URL provided, finding latest deployment..."
-            TARGET_DEPLOYMENT=$(vercel list --token="$VERCEL_TOKEN" --limit=1 2>/dev/null | tail -1 | awk '{print $1}')
-          fi
-          
-          if [ -n "$TARGET_DEPLOYMENT" ]; then
-            echo "Promoting $TARGET_DEPLOYMENT to production..."
-            # Promote using vercel promote command
-            PROD_URL=$(vercel promote "$TARGET_DEPLOYMENT" --token="$VERCEL_TOKEN" 2>&1) || {
-              echo "vercel promote failed, trying alternative method..."
-              # Alternative: deploy with --prod flag
-              PROD_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" 2>&1) || {
-                echo "::error::Failed to promote deployment"
-                exit 1
-              }
-            }
-            {
-              echo "url=$PROD_URL"
-              echo "status=promoted"
-            } >> "$GITHUB_OUTPUT"
-            echo "✅ Promoted to production: $PROD_URL"
-          else
-            echo "::error::No deployment found to promote. Pass vercel-deployment-url from the preview step."
+          # Validate deployment URL
+          if [ -z "$DEPLOYMENT_URL" ]; then
+            echo "::error::No deployment URL provided. Pass vercel-deployment-url from the preview step."
             exit 1
           fi
+          
+          # Ensure URL is clean (just the https://...vercel.app part)
+          CLEAN_URL=$(echo "$DEPLOYMENT_URL" | grep -oE 'https://[a-zA-Z0-9._-]+\.vercel\.app' | head -1)
+          
+          if [ -z "$CLEAN_URL" ]; then
+            echo "::error::Invalid deployment URL format: $DEPLOYMENT_URL"
+            exit 1
+          fi
+          
+          echo "Promoting $CLEAN_URL to production..."
+          
+          # Use vercel alias to promote the deployment to production domain
+          # First, get the production domains
+          PROD_DOMAIN=$(vercel domains ls --token="$VERCEL_TOKEN" 2>/dev/null | grep -v "^>" | head -1 | awk '{print $1}')
+          
+          if [ -n "$PROD_DOMAIN" ]; then
+            echo "Aliasing $CLEAN_URL to $PROD_DOMAIN..."
+            vercel alias set "$CLEAN_URL" "$PROD_DOMAIN" --token="$VERCEL_TOKEN" || {
+              echo "::warning::vercel alias failed, trying --prod deploy..."
+            }
+          fi
+          
+          # Alternative approach: use vercel --prod to redeploy to production
+          echo "Deploying to production..."
+          PROD_OUTPUT=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN" 2>&1)
+          PROD_URL=$(echo "$PROD_OUTPUT" | grep -oE 'https://[a-zA-Z0-9._-]+' | head -1)
+          
+          if [ -z "$PROD_URL" ]; then
+            PROD_URL="$CLEAN_URL"
+          fi
+          
+          {
+            echo "url=$PROD_URL"
+            echo "status=promoted"
+          } >> "$GITHUB_OUTPUT"
+          echo "✅ Deployed to production: $PROD_URL"
 
       - name: Output deployment summary
         if: always()
