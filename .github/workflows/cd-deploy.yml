@@ -26,7 +26,7 @@ on:
         required: true
         type: string
       platform:
-        description: 'Deployment platform: kubernetes, ecs, azure-container-apps, vercel, netlify, ssh'
+        description: 'Deployment platform: kubernetes, ecs, flyio, vercel, netlify, ssh'
         required: false
         type: string
         default: 'kubernetes'
@@ -115,6 +115,57 @@ on:
         required: false
         type: string
         default: '/var/www/app'
+      # Fly.io inputs
+      flyio-app-name:
+        description: 'Fly.io application name'
+        required: false
+        type: string
+        default: ''
+      flyio-region:
+        description: 'Fly.io deployment region (e.g., lhr, iad, sjc)'
+        required: false
+        type: string
+        default: ''
+      flyio-config-path:
+        description: 'Path to fly.toml configuration file'
+        required: false
+        type: string
+        default: 'fly.toml'
+      flyio-dockerfile:
+        description: 'Path to Dockerfile for Fly.io build'
+        required: false
+        type: string
+        default: 'Dockerfile'
+      flyio-build-args:
+        description: 'Build arguments for Fly.io (space-separated KEY=VALUE pairs)'
+        required: false
+        type: string
+        default: ''
+      flyio-vm-size:
+        description: 'Fly.io VM size (shared-cpu-1x, shared-cpu-2x, performance-1x, etc.)'
+        required: false
+        type: string
+        default: 'shared-cpu-1x'
+      flyio-vm-memory:
+        description: 'Fly.io VM memory in MB'
+        required: false
+        type: number
+        default: 256
+      flyio-min-machines:
+        description: 'Minimum number of Fly.io machines'
+        required: false
+        type: number
+        default: 1
+      flyio-max-machines:
+        description: 'Maximum number of Fly.io machines for autoscaling'
+        required: false
+        type: number
+        default: 1
+      flyio-ha:
+        description: 'Enable high availability (multiple machines in different regions)'
+        required: false
+        type: boolean
+        default: false
       # Common inputs
       working-directory:
         description: 'Working directory'
@@ -161,6 +212,9 @@ on:
         required: false
       SSH_PRIVATE_KEY:
         description: 'SSH private key for direct deployment'
+        required: false
+      FLY_API_TOKEN:
+        description: 'Fly.io API token for deployment'
         required: false
       DEPLOY_ENV_VARS:
         description: 'Environment variables for deployment (JSON format)'
@@ -516,6 +570,152 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------
+  # Fly.io Deployment
+  # ---------------------------------------------------------------------------
+  deploy-flyio:
+    name: Deploy to Fly.io
+    if: inputs.platform == 'flyio'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Fly.io CLI
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Check Fly.io app exists
+        id: check-app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
+        run: |
+          if flyctl apps list | grep -q "^$APP_NAME "; then
+            echo "app-exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "app-exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create Fly.io app (if not exists)
+        if: steps.check-app.outputs.app-exists == 'false' && !inputs.dry-run
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
+          REGION: ${{ inputs.flyio-region }}
+        run: |
+          if [ -n "$REGION" ]; then
+            flyctl apps create "$APP_NAME" --org personal -r "$REGION"
+          else
+            flyctl apps create "$APP_NAME" --org personal
+          fi
+
+      - name: Set Fly.io secrets
+        if: "!inputs.dry-run"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
+          DEPLOY_ENV_VARS: ${{ secrets.DEPLOY_ENV_VARS }}
+        run: |
+          if [ -n "$DEPLOY_ENV_VARS" ]; then
+            echo "$DEPLOY_ENV_VARS" | jq -r 'to_entries | .[] | "\(.key)=\(.value)"' | while read -r line; do
+              flyctl secrets set "$line" -a "$APP_NAME" || true
+            done
+          fi
+
+      - name: Deploy to Fly.io
+        id: deploy
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+          APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
+          CONFIG_PATH: ${{ inputs.flyio-config-path }}
+          DOCKERFILE: ${{ inputs.flyio-dockerfile }}
+          BUILD_ARGS: ${{ inputs.flyio-build-args }}
+          REGION: ${{ inputs.flyio-region }}
+          VM_SIZE: ${{ inputs.flyio-vm-size }}
+          VM_MEMORY: ${{ inputs.flyio-vm-memory }}
+          HA_MODE: ${{ inputs.flyio-ha }}
+          WAIT_FOR_ROLLOUT: ${{ inputs.wait-for-rollout }}
+        run: |
+          if [ "$DRY_RUN_MODE" = "true" ]; then
+            echo "Dry run - would deploy to Fly.io app: $APP_NAME"
+            echo "status=dry-run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          # Build fly deploy command
+          DEPLOY_CMD="flyctl deploy"
+          DEPLOY_CMD="$DEPLOY_CMD --app $APP_NAME"
+          DEPLOY_CMD="$DEPLOY_CMD --config $CONFIG_PATH"
+          DEPLOY_CMD="$DEPLOY_CMD --dockerfile $DOCKERFILE"
+          DEPLOY_CMD="$DEPLOY_CMD --vm-size $VM_SIZE"
+          DEPLOY_CMD="$DEPLOY_CMD --vm-memory $VM_MEMORY"
+          
+          # Add region if specified
+          if [ -n "$REGION" ]; then
+            DEPLOY_CMD="$DEPLOY_CMD --region $REGION"
+          fi
+          
+          # Add HA mode
+          if [ "$HA_MODE" = "true" ]; then
+            DEPLOY_CMD="$DEPLOY_CMD --ha"
+          fi
+          
+          # Add wait flag
+          if [ "$WAIT_FOR_ROLLOUT" = "true" ]; then
+            DEPLOY_CMD="$DEPLOY_CMD --wait-timeout 300"
+          else
+            DEPLOY_CMD="$DEPLOY_CMD --detach"
+          fi
+          
+          # Add build args
+          if [ -n "$BUILD_ARGS" ]; then
+            for arg in $BUILD_ARGS; do
+              DEPLOY_CMD="$DEPLOY_CMD --build-arg $arg"
+            done
+          fi
+          
+          # Execute deployment
+          eval "$DEPLOY_CMD"
+          
+          # Get deployment URL
+          URL=$(flyctl info -a "$APP_NAME" --json | jq -r '.Hostname // empty')
+          if [ -n "$URL" ]; then
+            echo "url=https://$URL" >> "$GITHUB_OUTPUT"
+          fi
+          echo "status=completed" >> "$GITHUB_OUTPUT"
+
+      - name: Get deployment status
+        if: "!inputs.dry-run"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
+        run: |
+          echo "Checking deployment status..."
+          flyctl status -a "$APP_NAME"
+          
+          echo ""
+          echo "Machine list:"
+          flyctl machines list -a "$APP_NAME"
+
+      - name: Scale machines
+        if: "!inputs.dry-run && inputs.flyio-min-machines > 1"
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
+          MIN_MACHINES: ${{ inputs.flyio-min-machines }}
+          MAX_MACHINES: ${{ inputs.flyio-max-machines }}
+        run: |
+          flyctl scale count "$MIN_MACHINES" --max "$MAX_MACHINES" -a "$APP_NAME" || true
+
+  # ---------------------------------------------------------------------------
   # SSH Deployment
   # ---------------------------------------------------------------------------
   deploy-ssh:
@@ -577,16 +777,17 @@ jobs:
   deploy:
     name: Deployment Summary
     runs-on: ubuntu-latest
-    needs: [deploy-kubernetes, deploy-ecs, deploy-vercel, deploy-netlify, deploy-ssh]
+    needs: [deploy-kubernetes, deploy-ecs, deploy-flyio, deploy-vercel, deploy-netlify, deploy-ssh]
     if: always()
     outputs:
-      url: ${{ needs.deploy-kubernetes.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-vercel.outputs.url || needs.deploy-netlify.outputs.url || needs.deploy-ssh.outputs.url }}
-      status: ${{ needs.deploy-kubernetes.outputs.status || needs.deploy-ecs.outputs.status || needs.deploy-vercel.outputs.status || needs.deploy-netlify.outputs.status || needs.deploy-ssh.outputs.status }}
+      url: ${{ needs.deploy-kubernetes.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-flyio.outputs.url || needs.deploy-vercel.outputs.url || needs.deploy-netlify.outputs.url || needs.deploy-ssh.outputs.url }}
+      status: ${{ needs.deploy-kubernetes.outputs.status || needs.deploy-ecs.outputs.status || needs.deploy-flyio.outputs.status || needs.deploy-vercel.outputs.status || needs.deploy-netlify.outputs.status || needs.deploy-ssh.outputs.status }}
     steps:
       - name: Deployment summary
         env:
           K8S_RESULT: ${{ needs.deploy-kubernetes.result }}
           ECS_RESULT: ${{ needs.deploy-ecs.result }}
+          FLYIO_RESULT: ${{ needs.deploy-flyio.result }}
           VERCEL_RESULT: ${{ needs.deploy-vercel.result }}
           NETLIFY_RESULT: ${{ needs.deploy-netlify.result }}
           SSH_RESULT: ${{ needs.deploy-ssh.result }}
@@ -598,6 +799,7 @@ jobs:
             echo "|----------|--------|"
             echo "| Kubernetes | $K8S_RESULT |"
             echo "| AWS ECS | $ECS_RESULT |"
+            echo "| Fly.io | $FLYIO_RESULT |"
             echo "| Vercel | $VERCEL_RESULT |"
             echo "| Netlify | $NETLIFY_RESULT |"
             echo "| SSH | $SSH_RESULT |"

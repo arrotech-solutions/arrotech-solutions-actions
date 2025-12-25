@@ -39,11 +39,107 @@ Navigate to your organization's settings and add the following secrets:
    - `AWS_SECRET_ACCESS_KEY`
    - `AWS_REGION` (optional, can be set as variable)
 
+#### For Vercel Deployments (Frontend Apps)
+
+1. **Get your Vercel token:**
+   - Go to [Vercel Account Settings → Tokens](https://vercel.com/account/tokens)
+   - Create a new token with "Full Account" scope
+   - Copy the token
+
+2. **Add as organization secret:**
+   - Name: `VERCEL_TOKEN`
+   - Value: Your Vercel API token
+   - Access: Selected repositories (frontend apps)
+
+3. **In your frontend repository:**
+   - Link your project to Vercel: `npx vercel link`
+   - This creates a `.vercel` directory with project configuration
+
+#### For Fly.io Deployments (Backend Apps)
+
+1. **Install Fly.io CLI:**
+   ```bash
+   # macOS
+   brew install flyctl
+
+   # Linux
+   curl -L https://fly.io/install.sh | sh
+
+   # Windows
+   powershell -Command "iwr https://fly.io/install.ps1 -useb | iex"
+   ```
+
+2. **Authenticate and get your API token:**
+   ```bash
+   # Login to Fly.io
+   flyctl auth login
+
+   # Create an API token
+   flyctl tokens create deploy -x 999999h
+   ```
+
+3. **Add as organization secret:**
+   - Name: `FLY_API_TOKEN`
+   - Value: Your Fly.io API token
+   - Access: Selected repositories (backend apps)
+
+4. **In your backend repository, create `fly.toml`:**
+   ```toml
+   app = "your-app-name"
+   primary_region = "lhr"  # London, change as needed
+
+   [build]
+     dockerfile = "Dockerfile"
+
+   [http_service]
+     internal_port = 3000  # Your app's port
+     force_https = true
+     auto_stop_machines = true
+     auto_start_machines = true
+     min_machines_running = 0
+
+   [env]
+     NODE_ENV = "production"
+   ```
+
+5. **Add environment-specific secrets:**
+   - Create `STAGING_ENV_VARS` and `PRODUCTION_ENV_VARS` secrets
+   - Format as JSON: `{"DATABASE_URL": "postgres://...", "REDIS_URL": "redis://..."}`
+
 ---
 
 ## Step 2: Set Up a Repository
 
-### Option A: Full Pipeline (Recommended for production apps)
+### Option A: Frontend App (Vercel)
+
+1. Copy the Vercel template:
+   ```bash
+   curl -o .github/workflows/deploy.yml \
+     https://raw.githubusercontent.com/arrotech-solutions/arrotech-solutions-actions/main/templates/vercel-deploy.yml
+   ```
+
+2. Link your project to Vercel:
+   ```bash
+   npx vercel link
+   ```
+
+3. Push to your repository - deployments will run automatically!
+
+### Option B: Backend App (Fly.io)
+
+1. Copy the Fly.io template:
+   ```bash
+   curl -o .github/workflows/deploy.yml \
+     https://raw.githubusercontent.com/arrotech-solutions/arrotech-solutions-actions/main/templates/flyio-deploy.yml
+   ```
+
+2. Create your `fly.toml` (see Fly.io setup section above)
+
+3. Create a Dockerfile for your app
+
+4. Push to your repository - deployments will run automatically!
+
+### Option C: Full Pipeline (Custom deployment)
 
 1. Copy the appropriate template:
    ```bash
@@ -63,7 +159,7 @@ Navigate to your organization's settings and add the following secrets:
 
 3. Push to your repository
 
-### Option B: Minimal CI (For smaller projects)
+### Option D: Minimal CI (For smaller projects)
 
 1. Copy the minimal template:
    ```bash

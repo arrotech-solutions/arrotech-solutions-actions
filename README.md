@@ -178,7 +178,7 @@ jobs:
     uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
     with:
       environment: 'staging'        # staging, production
-      platform: 'kubernetes'        # kubernetes, ecs, vercel, netlify, ssh
+      platform: 'kubernetes'        # kubernetes, ecs, flyio, vercel, netlify, ssh
       image: 'ghcr.io/org/app:v1.0' # Container image
       namespace: 'staging'          # K8s namespace
       wait-for-rollout: true        # Wait for deployment
@@ -193,7 +193,8 @@ jobs:
 |----------|----------|
 | `kubernetes` | K8s clusters (Helm or kubectl) |
 | `ecs` | AWS Elastic Container Service |
-| `vercel` | Vercel serverless |
+| `flyio` | **Fly.io backend apps** |
+| `vercel` | **Vercel frontend apps** |
 | `netlify` | Netlify static sites |
 | `ssh` | Direct SSH deployment |
 
@@ -242,7 +243,8 @@ Ready-to-use workflow templates for common project types:
 | [`node-full-pipeline.yml`](templates/node-full-pipeline.yml) | Complete Node.js CI/CD with Docker | `cp templates/node-full-pipeline.yml .github/workflows/` |
 | [`python-full-pipeline.yml`](templates/python-full-pipeline.yml) | Complete Python CI/CD | `cp templates/python-full-pipeline.yml .github/workflows/` |
 | [`minimal-ci.yml`](templates/minimal-ci.yml) | Lightweight CI for small projects | `cp templates/minimal-ci.yml .github/workflows/` |
-| [`vercel-deploy.yml`](templates/vercel-deploy.yml) | Frontend deployment to Vercel | `cp templates/vercel-deploy.yml .github/workflows/` |
+| [`vercel-deploy.yml`](templates/vercel-deploy.yml) | **Frontend** deployment to Vercel | `cp templates/vercel-deploy.yml .github/workflows/` |
+| [`flyio-deploy.yml`](templates/flyio-deploy.yml) | **Backend** deployment to Fly.io | `cp templates/flyio-deploy.yml .github/workflows/` |
 
 ---
 
@@ -267,6 +269,7 @@ Configure these secrets at the **organization level** for all repositories to in
 | `NPM_TOKEN` | npm registry token | `cd-build-artifact.yml` |
 | `PYPI_TOKEN` | PyPI API token | `cd-build-artifact.yml` |
 | `VERCEL_TOKEN` | Vercel deployment token | `cd-deploy.yml` |
+| `FLY_API_TOKEN` | Fly.io API token | `cd-deploy.yml` |
 | `NETLIFY_AUTH_TOKEN` | Netlify auth token | `cd-deploy.yml` |
 
 ### Setting Organization Secrets
