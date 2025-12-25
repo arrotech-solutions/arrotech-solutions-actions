@@ -1,0 +1,137 @@
+# =============================================================================
+# Complete CI/CD Pipeline Template for Node.js Projects
+# =============================================================================
+# Copy this file to your repository's .github/workflows/ directory and customize.
+# 
+# This template demonstrates using all the centralized reusable workflows
+# for a typical Node.js application with Docker deployment.
+# =============================================================================
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # ===========================================================================
+  # Stage 1: Code Quality & Security (runs on all PRs and pushes)
+  # ===========================================================================
+  
+  code-quality:
+    name: Code Quality
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-code-quality.yml@main
+    with:
+      language: 'node'
+      node-version: '20'
+      prettier-check: true
+      fail-on-warnings: false
+
+  security-scan:
+    name: Security Scan
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-security-scan.yml@main
+    with:
+      language: 'javascript'
+      enable-codeql: true
+      enable-dependency-scan: true
+      enable-secret-scan: true
+      fail-on-high-severity: true
+    # Uncomment if you have a Snyk token
+    # secrets:
+    #   SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+  # ===========================================================================
+  # Stage 2: Testing (runs after quality checks pass)
+  # ===========================================================================
+  
+  test:
+    name: Tests
+    needs: [code-quality]
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-test.yml@main
+    with:
+      language: 'node'
+      node-version: '20'
+      coverage-threshold: 80
+      upload-coverage: true
+      run-integration-tests: false
+
+  # ===========================================================================
+  # Stage 3: Build (runs after tests pass, only on main/develop)
+  # ===========================================================================
+  
+  build:
+    name: Build
+    needs: [test, security-scan]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-build-artifact.yml@main
+    with:
+      artifact-type: 'docker'
+      registry: 'ghcr'
+      push-image: true
+      docker-platforms: 'linux/amd64,linux/arm64'
+    secrets:
+      REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Stage 4: Deploy to Staging (auto-deploy on develop branch)
+  # ===========================================================================
+  
+  deploy-staging:
+    name: Deploy Staging
+    needs: [build]
+    if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      environment: 'staging'
+      platform: 'kubernetes'  # Change to your platform: kubernetes, ecs, vercel, netlify
+      image: ${{ needs.build.outputs.artifact-url }}
+      namespace: 'staging'
+      wait-for-rollout: true
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+  # ===========================================================================
+  # Stage 5: Deploy to Production (on release or manual trigger)
+  # ===========================================================================
+  
+  deploy-production:
+    name: Deploy Production
+    needs: [build]
+    if: github.event_name == 'release' || (github.ref == 'refs/heads/main' && github.event_name == 'push')
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      environment: 'production'
+      platform: 'kubernetes'  # Change to your platform
+      image: ${{ needs.build.outputs.artifact-url }}
+      namespace: 'production'
+      wait-for-rollout: true
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_PROD }}
+
+  # ===========================================================================
+  # PR Checks (only on pull requests)
+  # ===========================================================================
+  
+  pr-checks:
+    name: PR Validation
+    if: github.event_name == 'pull_request'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/pr-checks.yml@main
+    with:
+      require-conventional-commits: true
+      max-files-changed: 50
+      block-wip: true
+

@@ -1,0 +1,39 @@
+# =============================================================================
+# Minimal CI Template
+# =============================================================================
+# A lightweight CI setup for smaller projects or getting started quickly.
+# Copy this to your repository's .github/workflows/ci.yml
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  quality:
+    name: Quality & Tests
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-code-quality.yml@main
+    with:
+      language: 'node'  # Change to: node, python, go, or multi
+      node-version: '20'
+
+  security:
+    name: Security
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-security-scan.yml@main
+    with:
+      language: 'javascript'  # Change to match your primary language
+      enable-codeql: true
+      enable-dependency-scan: true
+
+  test:
+    name: Test
+    needs: quality
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-test.yml@main
+    with:
+      language: 'node'  # Change to: node, python, go
+      coverage-threshold: 0  # Set to 80 for coverage enforcement
+

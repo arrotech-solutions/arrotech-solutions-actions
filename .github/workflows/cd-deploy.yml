@@ -1,0 +1,520 @@
+# =============================================================================
+# Reusable Deployment Workflow
+# =============================================================================
+# This workflow handles deployments to various environments and platforms.
+# Supports: Kubernetes, AWS ECS, Azure Container Apps, Vercel, Netlify, etc.
+#
+# Usage in consuming repo:
+#   jobs:
+#     deploy:
+#       uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+#       with:
+#         environment: 'staging'
+#         platform: 'kubernetes'
+#         image: 'ghcr.io/arrotech-solutions/my-app:sha-abc123'
+#       secrets:
+#         KUBE_CONFIG: ${{ secrets.KUBE_CONFIG }}
+# =============================================================================
+
+name: Deployment
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment: development, staging, production'
+        required: true
+        type: string
+      platform:
+        description: 'Deployment platform: kubernetes, ecs, azure-container-apps, vercel, netlify, ssh'
+        required: true
+        type: string
+        default: 'kubernetes'
+      # Container/Image inputs
+      image:
+        description: 'Container image to deploy (full URL with tag/digest)'
+        required: false
+        type: string
+        default: ''
+      # Kubernetes inputs
+      namespace:
+        description: 'Kubernetes namespace'
+        required: false
+        type: string
+        default: 'default'
+      deployment-name:
+        description: 'Kubernetes deployment name'
+        required: false
+        type: string
+        default: ''
+      helm-chart-path:
+        description: 'Path to Helm chart (if using Helm)'
+        required: false
+        type: string
+        default: ''
+      helm-values-file:
+        description: 'Path to Helm values file'
+        required: false
+        type: string
+        default: ''
+      kubectl-manifest-path:
+        description: 'Path to Kubernetes manifests (if not using Helm)'
+        required: false
+        type: string
+        default: ''
+      # AWS ECS inputs
+      ecs-cluster:
+        description: 'ECS cluster name'
+        required: false
+        type: string
+        default: ''
+      ecs-service:
+        description: 'ECS service name'
+        required: false
+        type: string
+        default: ''
+      ecs-task-definition:
+        description: 'Path to ECS task definition file'
+        required: false
+        type: string
+        default: ''
+      aws-region:
+        description: 'AWS region'
+        required: false
+        type: string
+        default: 'us-east-1'
+      # Vercel/Netlify inputs
+      project-name:
+        description: 'Project name for serverless platforms'
+        required: false
+        type: string
+        default: ''
+      build-command:
+        description: 'Build command for serverless deployments'
+        required: false
+        type: string
+        default: 'npm run build'
+      output-directory:
+        description: 'Output directory for serverless deployments'
+        required: false
+        type: string
+        default: 'dist'
+      # SSH deployment inputs
+      ssh-host:
+        description: 'SSH host for direct deployment'
+        required: false
+        type: string
+        default: ''
+      ssh-user:
+        description: 'SSH username'
+        required: false
+        type: string
+        default: 'deploy'
+      deploy-path:
+        description: 'Remote path for deployment'
+        required: false
+        type: string
+        default: '/var/www/app'
+      # Common inputs
+      working-directory:
+        description: 'Working directory'
+        required: false
+        type: string
+        default: '.'
+      wait-for-rollout:
+        description: 'Wait for deployment rollout to complete'
+        required: false
+        type: boolean
+        default: true
+      rollout-timeout:
+        description: 'Timeout for rollout wait (in seconds)'
+        required: false
+        type: number
+        default: 600
+      dry-run:
+        description: 'Perform a dry run without actual deployment'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      deployment-url:
+        description: 'URL of the deployed application'
+        value: ${{ jobs.deploy.outputs.url }}
+      deployment-status:
+        description: 'Status of the deployment'
+        value: ${{ jobs.deploy.outputs.status }}
+    secrets:
+      KUBE_CONFIG:
+        description: 'Kubeconfig file contents (base64 encoded)'
+        required: false
+      AWS_ACCESS_KEY_ID:
+        description: 'AWS Access Key ID'
+        required: false
+      AWS_SECRET_ACCESS_KEY:
+        description: 'AWS Secret Access Key'
+        required: false
+      VERCEL_TOKEN:
+        description: 'Vercel API token'
+        required: false
+      NETLIFY_AUTH_TOKEN:
+        description: 'Netlify authentication token'
+        required: false
+      SSH_PRIVATE_KEY:
+        description: 'SSH private key for direct deployment'
+        required: false
+      DEPLOY_ENV_VARS:
+        description: 'Environment variables for deployment (JSON format)'
+        required: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Pre-deployment Checks
+  # ---------------------------------------------------------------------------
+  pre-check:
+    name: Pre-deployment Validation
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.validate.outputs.proceed }}
+    steps:
+      - name: Validate inputs
+        id: validate
+        run: |
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Platform: ${{ inputs.platform }}"
+          echo "Dry run: ${{ inputs.dry-run }}"
+          
+          # Production deployment warnings
+          if [ "${{ inputs.environment }}" = "production" ]; then
+            echo "::warning::Production deployment detected. Ensure all approvals are in place."
+          fi
+          
+          echo "proceed=true" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # Kubernetes Deployment
+  # ---------------------------------------------------------------------------
+  deploy-kubernetes:
+    name: Deploy to Kubernetes
+    if: inputs.platform == 'kubernetes'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: 'latest'
+
+      - name: Setup Helm
+        if: inputs.helm-chart-path != ''
+        uses: azure/setup-helm@v3
+        with:
+          version: 'latest'
+
+      - name: Configure kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Deploy with Helm
+        id: helm-deploy
+        if: inputs.helm-chart-path != ''
+        run: |
+          HELM_ARGS="upgrade --install ${{ inputs.deployment-name || github.event.repository.name }} ${{ inputs.helm-chart-path }}"
+          HELM_ARGS="$HELM_ARGS --namespace ${{ inputs.namespace }}"
+          HELM_ARGS="$HELM_ARGS --set image=${{ inputs.image }}"
+          
+          if [ -n "${{ inputs.helm-values-file }}" ]; then
+            HELM_ARGS="$HELM_ARGS -f ${{ inputs.helm-values-file }}"
+          fi
+          
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            HELM_ARGS="$HELM_ARGS --dry-run"
+          fi
+          
+          helm $HELM_ARGS --wait --timeout ${{ inputs.rollout-timeout }}s
+
+      - name: Deploy with kubectl
+        id: kubectl-deploy
+        if: inputs.kubectl-manifest-path != '' && inputs.helm-chart-path == ''
+        run: |
+          # Update image in manifests
+          if [ -n "${{ inputs.image }}" ]; then
+            find ${{ inputs.kubectl-manifest-path }} -name "*.yaml" -o -name "*.yml" | \
+              xargs sed -i "s|image:.*|image: ${{ inputs.image }}|g"
+          fi
+          
+          DRY_RUN=""
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            DRY_RUN="--dry-run=client"
+          fi
+          
+          kubectl apply -f ${{ inputs.kubectl-manifest-path }} -n ${{ inputs.namespace }} $DRY_RUN
+
+      - name: Update deployment image
+        id: deploy
+        if: inputs.deployment-name != '' && inputs.helm-chart-path == '' && inputs.kubectl-manifest-path == ''
+        run: |
+          DRY_RUN=""
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            DRY_RUN="--dry-run=client"
+          fi
+          
+          kubectl set image deployment/${{ inputs.deployment-name }} \
+            ${{ inputs.deployment-name }}=${{ inputs.image }} \
+            -n ${{ inputs.namespace }} $DRY_RUN
+          
+          echo "status=initiated" >> $GITHUB_OUTPUT
+
+      - name: Wait for rollout
+        if: inputs.wait-for-rollout && !inputs.dry-run
+        run: |
+          kubectl rollout status deployment/${{ inputs.deployment-name || github.event.repository.name }} \
+            -n ${{ inputs.namespace }} \
+            --timeout=${{ inputs.rollout-timeout }}s
+          
+          echo "status=completed" >> $GITHUB_OUTPUT
+
+      - name: Get service URL
+        if: "!inputs.dry-run"
+        id: get-url
+        run: |
+          SERVICE_NAME="${{ inputs.deployment-name || github.event.repository.name }}"
+          URL=$(kubectl get svc $SERVICE_NAME -n ${{ inputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].hostname}' 2>/dev/null || \
+                kubectl get svc $SERVICE_NAME -n ${{ inputs.namespace }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || \
+                echo "")
+          echo "url=$URL" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # AWS ECS Deployment
+  # ---------------------------------------------------------------------------
+  deploy-ecs:
+    name: Deploy to AWS ECS
+    if: inputs.platform == 'ecs'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ inputs.aws-region }}
+
+      - name: Update ECS task definition
+        id: task-def
+        if: inputs.ecs-task-definition != ''
+        run: |
+          # Update image in task definition
+          TASK_DEF=$(cat ${{ inputs.ecs-task-definition }})
+          TASK_DEF=$(echo $TASK_DEF | jq --arg IMAGE "${{ inputs.image }}" '.containerDefinitions[0].image = $IMAGE')
+          echo $TASK_DEF > task-definition-updated.json
+          
+          # Register new task definition
+          NEW_TASK_DEF=$(aws ecs register-task-definition --cli-input-json file://task-definition-updated.json)
+          TASK_DEF_ARN=$(echo $NEW_TASK_DEF | jq -r '.taskDefinition.taskDefinitionArn')
+          echo "task-def-arn=$TASK_DEF_ARN" >> $GITHUB_OUTPUT
+
+      - name: Deploy to ECS
+        id: deploy
+        run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "Dry run - would deploy to ECS cluster ${{ inputs.ecs-cluster }}"
+            echo "status=dry-run" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          aws ecs update-service \
+            --cluster ${{ inputs.ecs-cluster }} \
+            --service ${{ inputs.ecs-service }} \
+            --task-definition ${{ steps.task-def.outputs.task-def-arn || inputs.ecs-task-definition }} \
+            --force-new-deployment
+          
+          echo "status=initiated" >> $GITHUB_OUTPUT
+
+      - name: Wait for deployment
+        if: inputs.wait-for-rollout && !inputs.dry-run
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ inputs.ecs-cluster }} \
+            --services ${{ inputs.ecs-service }}
+          
+          echo "status=completed" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # Vercel Deployment
+  # ---------------------------------------------------------------------------
+  deploy-vercel:
+    name: Deploy to Vercel
+    if: inputs.platform == 'vercel'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install Vercel CLI
+        run: npm install -g vercel@latest
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=${{ inputs.environment }} --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build project
+        run: vercel build ${{ inputs.environment == 'production' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        id: deploy
+        run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "Dry run - would deploy to Vercel"
+            echo "status=dry-run" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          DEPLOY_URL=$(vercel deploy --prebuilt ${{ inputs.environment == 'production' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }})
+          echo "url=$DEPLOY_URL" >> $GITHUB_OUTPUT
+          echo "status=completed" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # Netlify Deployment
+  # ---------------------------------------------------------------------------
+  deploy-netlify:
+    name: Deploy to Netlify
+    if: inputs.platform == 'netlify'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies and build
+        run: |
+          npm ci
+          ${{ inputs.build-command }}
+
+      - name: Deploy to Netlify
+        id: deploy
+        uses: nwtgck/actions-netlify@v2
+        with:
+          publish-dir: ${{ inputs.output-directory }}
+          production-deploy: ${{ inputs.environment == 'production' }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          deploy-message: "Deploy from GitHub Actions - ${{ github.sha }}"
+          enable-pull-request-comment: true
+          enable-commit-comment: true
+        env:
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          NETLIFY_SITE_ID: ${{ inputs.project-name }}
+
+  # ---------------------------------------------------------------------------
+  # SSH Deployment
+  # ---------------------------------------------------------------------------
+  deploy-ssh:
+    name: Deploy via SSH
+    if: inputs.platform == 'ssh'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ inputs.ssh-host }} >> ~/.ssh/known_hosts
+
+      - name: Deploy via SSH
+        id: deploy
+        run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "Dry run - would deploy via SSH to ${{ inputs.ssh-host }}"
+            echo "status=dry-run" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Sync files
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            --exclude '.git' \
+            --exclude 'node_modules' \
+            --exclude '.env*' \
+            ./ ${{ inputs.ssh-user }}@${{ inputs.ssh-host }}:${{ inputs.deploy-path }}/
+          
+          # Restart application (customize based on your setup)
+          ssh -i ~/.ssh/deploy_key ${{ inputs.ssh-user }}@${{ inputs.ssh-host }} "cd ${{ inputs.deploy-path }} && ./deploy.sh" || true
+          
+          echo "status=completed" >> $GITHUB_OUTPUT
+
+  # ---------------------------------------------------------------------------
+  # Summary
+  # ---------------------------------------------------------------------------
+  deploy:
+    name: Deployment Summary
+    runs-on: ubuntu-latest
+    needs: [deploy-kubernetes, deploy-ecs, deploy-vercel, deploy-netlify, deploy-ssh]
+    if: always()
+    outputs:
+      url: ${{ needs.deploy-kubernetes.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-vercel.outputs.url || needs.deploy-netlify.outputs.url || needs.deploy-ssh.outputs.url }}
+      status: ${{ needs.deploy-kubernetes.outputs.status || needs.deploy-ecs.outputs.status || needs.deploy-vercel.outputs.status || needs.deploy-netlify.outputs.status || needs.deploy-ssh.outputs.status }}
+    steps:
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Platform | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Kubernetes | ${{ needs.deploy-kubernetes.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| AWS ECS | ${{ needs.deploy-ecs.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Vercel | ${{ needs.deploy-vercel.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Netlify | ${{ needs.deploy-netlify.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SSH | ${{ needs.deploy-ssh.result }} |" >> $GITHUB_STEP_SUMMARY
+

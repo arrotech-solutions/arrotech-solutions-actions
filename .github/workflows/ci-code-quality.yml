@@ -1,0 +1,224 @@
+# =============================================================================
+# Reusable Code Quality & Linting Workflow
+# =============================================================================
+# This workflow provides consistent code quality checks across all repos.
+# Supports: Node.js, Python, Go, and general formatting checks.
+#
+# Usage in consuming repo:
+#   jobs:
+#     code-quality:
+#       uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-code-quality.yml@main
+#       with:
+#         language: 'node'
+#         node-version: '20'
+# =============================================================================
+
+name: Code Quality & Linting
+
+on:
+  workflow_call:
+    inputs:
+      language:
+        description: 'Primary language: node, python, go, or multi'
+        required: true
+        type: string
+        default: 'node'
+      node-version:
+        description: 'Node.js version (if applicable)'
+        required: false
+        type: string
+        default: '20'
+      python-version:
+        description: 'Python version (if applicable)'
+        required: false
+        type: string
+        default: '3.11'
+      go-version:
+        description: 'Go version (if applicable)'
+        required: false
+        type: string
+        default: '1.21'
+      working-directory:
+        description: 'Working directory for commands'
+        required: false
+        type: string
+        default: '.'
+      eslint-args:
+        description: 'Additional ESLint arguments'
+        required: false
+        type: string
+        default: ''
+      prettier-check:
+        description: 'Run Prettier format check'
+        required: false
+        type: boolean
+        default: true
+      fail-on-warnings:
+        description: 'Fail the build on lint warnings'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      lint-result:
+        description: 'Lint check result: passed or failed'
+        value: ${{ jobs.lint.outputs.result }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Node.js Linting (ESLint + Prettier)
+  # ---------------------------------------------------------------------------
+  lint-node:
+    name: Lint Node.js
+    if: inputs.language == 'node' || inputs.language == 'multi'
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.lint.outcome }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working-directory }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run ESLint
+        id: lint
+        run: |
+          ARGS="${{ inputs.eslint-args }}"
+          if [ "${{ inputs.fail-on-warnings }}" = "true" ]; then
+            ARGS="$ARGS --max-warnings=0"
+          fi
+          npx eslint . $ARGS --format stylish
+        continue-on-error: ${{ !inputs.fail-on-warnings }}
+
+      - name: Run Prettier Check
+        if: inputs.prettier-check
+        run: npx prettier --check .
+        continue-on-error: true
+
+      - name: TypeScript Type Check
+        run: |
+          if [ -f "tsconfig.json" ]; then
+            npx tsc --noEmit
+          else
+            echo "No tsconfig.json found, skipping TypeScript check"
+          fi
+        continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # Python Linting (Ruff + Black + mypy)
+  # ---------------------------------------------------------------------------
+  lint-python:
+    name: Lint Python
+    if: inputs.language == 'python' || inputs.language == 'multi'
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.lint.outcome }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+          cache: 'pip'
+
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff black mypy
+
+      - name: Run Ruff (fast Python linter)
+        id: lint
+        run: ruff check .
+        continue-on-error: ${{ !inputs.fail-on-warnings }}
+
+      - name: Run Black (format check)
+        run: black --check .
+        continue-on-error: true
+
+      - name: Run mypy (type check)
+        run: |
+          if [ -f "pyproject.toml" ] || [ -f "mypy.ini" ]; then
+            mypy .
+          else
+            echo "No mypy config found, running with defaults"
+            mypy . --ignore-missing-imports
+          fi
+        continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # Go Linting (golangci-lint)
+  # ---------------------------------------------------------------------------
+  lint-go:
+    name: Lint Go
+    if: inputs.language == 'go' || inputs.language == 'multi'
+    runs-on: ubuntu-latest
+    outputs:
+      result: ${{ steps.lint.outcome }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          cache: true
+
+      - name: Run golangci-lint
+        id: lint
+        uses: golangci/golangci-lint-action@v4
+        with:
+          version: latest
+          working-directory: ${{ inputs.working-directory }}
+          args: --timeout=5m
+
+  # ---------------------------------------------------------------------------
+  # Summary Job
+  # ---------------------------------------------------------------------------
+  lint:
+    name: Lint Summary
+    runs-on: ubuntu-latest
+    needs: [lint-node, lint-python, lint-go]
+    if: always()
+    outputs:
+      result: ${{ steps.summary.outputs.result }}
+    steps:
+      - name: Evaluate results
+        id: summary
+        run: |
+          NODE_RESULT="${{ needs.lint-node.result }}"
+          PYTHON_RESULT="${{ needs.lint-python.result }}"
+          GO_RESULT="${{ needs.lint-go.result }}"
+          
+          echo "Node.js lint: $NODE_RESULT"
+          echo "Python lint: $PYTHON_RESULT"
+          echo "Go lint: $GO_RESULT"
+          
+          # Check for any failures (excluding skipped jobs)
+          if [[ "$NODE_RESULT" == "failure" ]] || \
+             [[ "$PYTHON_RESULT" == "failure" ]] || \
+             [[ "$GO_RESULT" == "failure" ]]; then
+            echo "result=failed" >> $GITHUB_OUTPUT
+            exit 1
+          fi
+          
+          echo "result=passed" >> $GITHUB_OUTPUT
+

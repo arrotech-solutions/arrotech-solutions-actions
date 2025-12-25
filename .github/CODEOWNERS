@@ -1,0 +1,15 @@
+# CODEOWNERS for arrotech-solutions-actions
+# These owners will be requested for review on all PRs
+
+# Default owners for everything in the repo
+* @arrotech-solutions/devops @arrotech-solutions/platform-team
+
+# Workflow files require DevOps review
+/.github/workflows/ @arrotech-solutions/devops
+
+# Templates can be reviewed by any senior developer
+/templates/ @arrotech-solutions/devops @arrotech-solutions/senior-developers
+
+# Security-related workflows require security team review
+/.github/workflows/ci-security-scan.yml @arrotech-solutions/security @arrotech-solutions/devops
+

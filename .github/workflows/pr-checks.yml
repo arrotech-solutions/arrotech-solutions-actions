@@ -1,0 +1,243 @@
+# =============================================================================
+# Reusable Pull Request Checks Workflow
+# =============================================================================
+# This workflow provides comprehensive PR validation including:
+# - Conventional commit message validation
+# - PR size checks
+# - Label enforcement
+# - Changelog verification
+#
+# Usage in consuming repo:
+#   jobs:
+#     pr-checks:
+#       uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/pr-checks.yml@main
+#       with:
+#         require-conventional-commits: true
+#         max-files-changed: 50
+# =============================================================================
+
+name: Pull Request Checks
+
+on:
+  workflow_call:
+    inputs:
+      require-conventional-commits:
+        description: 'Require conventional commit format'
+        required: false
+        type: boolean
+        default: true
+      conventional-commit-types:
+        description: 'Allowed commit types (comma-separated)'
+        required: false
+        type: string
+        default: 'feat,fix,docs,style,refactor,perf,test,build,ci,chore,revert'
+      max-files-changed:
+        description: 'Maximum number of files changed (0 = no limit)'
+        required: false
+        type: number
+        default: 0
+      max-lines-changed:
+        description: 'Maximum lines changed (0 = no limit)'
+        required: false
+        type: number
+        default: 0
+      require-labels:
+        description: 'Require at least one label on PR'
+        required: false
+        type: boolean
+        default: false
+      required-labels:
+        description: 'Required labels (comma-separated, at least one must be present)'
+        required: false
+        type: string
+        default: ''
+      require-changelog:
+        description: 'Require CHANGELOG.md to be updated'
+        required: false
+        type: boolean
+        default: false
+      require-tests:
+        description: 'Require test files to be modified when source files change'
+        required: false
+        type: boolean
+        default: false
+      test-file-pattern:
+        description: 'Pattern to identify test files'
+        required: false
+        type: string
+        default: '**/*.test.*, **/*.spec.*, **/test_*.*, **/*_test.*'
+      block-wip:
+        description: 'Block PRs with WIP in title'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  pr-validation:
+    name: Validate Pull Request
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get PR info
+        id: pr-info
+        run: |
+          # Get PR details from GitHub context
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_BODY="${{ github.event.pull_request.body }}"
+          FILES_CHANGED=${{ github.event.pull_request.changed_files }}
+          ADDITIONS=${{ github.event.pull_request.additions }}
+          DELETIONS=${{ github.event.pull_request.deletions }}
+          TOTAL_CHANGES=$((ADDITIONS + DELETIONS))
+          
+          echo "title=$PR_TITLE" >> $GITHUB_OUTPUT
+          echo "files-changed=$FILES_CHANGED" >> $GITHUB_OUTPUT
+          echo "lines-changed=$TOTAL_CHANGES" >> $GITHUB_OUTPUT
+          
+          echo "## PR Statistics" >> $GITHUB_STEP_SUMMARY
+          echo "- Files changed: $FILES_CHANGED" >> $GITHUB_STEP_SUMMARY
+          echo "- Lines added: $ADDITIONS" >> $GITHUB_STEP_SUMMARY
+          echo "- Lines deleted: $DELETIONS" >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for WIP
+        if: inputs.block-wip
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          if echo "$PR_TITLE" | grep -iE '^\[?WIP\]?|^WIP:|work in progress' > /dev/null; then
+            echo "::error::PR appears to be a work in progress (WIP). Please remove WIP from the title when ready."
+            exit 1
+          fi
+
+      - name: Validate conventional commits
+        if: inputs.require-conventional-commits
+        run: |
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          ALLOWED_TYPES="${{ inputs.conventional-commit-types }}"
+          
+          # Build regex pattern from allowed types
+          TYPES_PATTERN=$(echo "$ALLOWED_TYPES" | tr ',' '|')
+          PATTERN="^($TYPES_PATTERN)(\(.+\))?!?: .+"
+          
+          if ! echo "$PR_TITLE" | grep -E "$PATTERN" > /dev/null; then
+            echo "::error::PR title does not follow conventional commit format."
+            echo "::error::Expected format: type(scope)?: description"
+            echo "::error::Allowed types: $ALLOWED_TYPES"
+            echo "::error::Examples: 'feat: add user login', 'fix(auth): resolve token expiry'"
+            exit 1
+          fi
+          
+          echo "✅ PR title follows conventional commit format"
+
+      - name: Check PR size (files)
+        if: inputs.max-files-changed > 0
+        run: |
+          FILES_CHANGED=${{ github.event.pull_request.changed_files }}
+          MAX_FILES=${{ inputs.max-files-changed }}
+          
+          if [ "$FILES_CHANGED" -gt "$MAX_FILES" ]; then
+            echo "::error::PR changes $FILES_CHANGED files, which exceeds the maximum of $MAX_FILES."
+            echo "::error::Consider breaking this PR into smaller, focused changes."
+            exit 1
+          fi
+          
+          echo "✅ PR file count is within limits ($FILES_CHANGED/$MAX_FILES)"
+
+      - name: Check PR size (lines)
+        if: inputs.max-lines-changed > 0
+        run: |
+          TOTAL_CHANGES=$((${{ github.event.pull_request.additions }} + ${{ github.event.pull_request.deletions }}))
+          MAX_LINES=${{ inputs.max-lines-changed }}
+          
+          if [ "$TOTAL_CHANGES" -gt "$MAX_LINES" ]; then
+            echo "::warning::PR changes $TOTAL_CHANGES lines, which exceeds the recommended maximum of $MAX_LINES."
+            echo "::warning::Large PRs are harder to review. Consider breaking this into smaller changes."
+          fi
+
+      - name: Check required labels
+        if: inputs.require-labels || inputs.required-labels != ''
+        run: |
+          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          LABEL_COUNT=$(echo "$LABELS" | jq 'length')
+          
+          if [ "${{ inputs.require-labels }}" = "true" ] && [ "$LABEL_COUNT" -eq 0 ]; then
+            echo "::error::PR must have at least one label"
+            exit 1
+          fi
+          
+          if [ -n "${{ inputs.required-labels }}" ]; then
+            REQUIRED="${{ inputs.required-labels }}"
+            FOUND=false
+            
+            for label in $(echo "$REQUIRED" | tr ',' ' '); do
+              if echo "$LABELS" | grep -q "\"$label\""; then
+                FOUND=true
+                break
+              fi
+            done
+            
+            if [ "$FOUND" = "false" ]; then
+              echo "::error::PR must have at least one of these labels: $REQUIRED"
+              exit 1
+            fi
+          fi
+          
+          echo "✅ PR labels validated"
+
+      - name: Check CHANGELOG updates
+        if: inputs.require-changelog
+        run: |
+          git diff --name-only origin/${{ github.base_ref }}..HEAD | grep -E '^CHANGELOG\.md$' > /dev/null || {
+            echo "::warning::CHANGELOG.md was not updated. Please document your changes."
+          }
+
+      - name: Check for test coverage
+        if: inputs.require-tests
+        run: |
+          # Get list of changed source files (excluding tests)
+          SOURCE_PATTERN="^(src|lib|app)/.*\.(ts|js|py|go)$"
+          TEST_PATTERN="${{ inputs.test-file-pattern }}"
+          
+          SOURCE_FILES=$(git diff --name-only origin/${{ github.base_ref }}..HEAD | grep -E "$SOURCE_PATTERN" | grep -vE "(test|spec)" || true)
+          TEST_FILES=$(git diff --name-only origin/${{ github.base_ref }}..HEAD | grep -E "(test|spec)" || true)
+          
+          if [ -n "$SOURCE_FILES" ] && [ -z "$TEST_FILES" ]; then
+            echo "::warning::Source files were modified but no test files were updated."
+            echo "::warning::Consider adding or updating tests for your changes."
+          fi
+
+  commit-messages:
+    name: Validate Commit Messages
+    if: inputs.require-conventional-commits
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          ALLOWED_TYPES="${{ inputs.conventional-commit-types }}"
+          TYPES_PATTERN=$(echo "$ALLOWED_TYPES" | tr ',' '|')
+          PATTERN="^($TYPES_PATTERN)(\(.+\))?!?: .+"
+          
+          INVALID_COMMITS=""
+          
+          while IFS= read -r commit; do
+            HASH=$(echo "$commit" | cut -d' ' -f1)
+            MESSAGE=$(echo "$commit" | cut -d' ' -f2-)
+            
+            if ! echo "$MESSAGE" | grep -E "$PATTERN" > /dev/null; then
+              INVALID_COMMITS="$INVALID_COMMITS\n- $HASH: $MESSAGE"
+            fi
+          done < <(git log --oneline origin/${{ github.base_ref }}..HEAD)
+          
+          if [ -n "$INVALID_COMMITS" ]; then
+            echo "::warning::Some commits don't follow conventional commit format:"
+            echo -e "$INVALID_COMMITS"
+            echo "::warning::Consider using 'git rebase -i' to update commit messages"
+          fi
+

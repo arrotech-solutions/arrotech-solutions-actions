@@ -1,0 +1,60 @@
+# =============================================================================
+# Vercel Deployment Template
+# =============================================================================
+# Template for deploying frontend applications to Vercel.
+# Copy to your repository's .github/workflows/ directory.
+# =============================================================================
+
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # Run quality checks first
+  quality:
+    name: Quality Checks
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-code-quality.yml@main
+    with:
+      language: 'node'
+      node-version: '20'
+      prettier-check: true
+
+  test:
+    name: Tests
+    needs: quality
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-test.yml@main
+    with:
+      language: 'node'
+      node-version: '20'
+      coverage-threshold: 70
+
+  # Deploy preview on PRs
+  deploy-preview:
+    name: Deploy Preview
+    needs: [test]
+    if: github.event_name == 'pull_request'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      environment: 'staging'
+      platform: 'vercel'
+      working-directory: '.'
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+  # Deploy to production on main
+  deploy-production:
+    name: Deploy Production
+    needs: [test]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      environment: 'production'
+      platform: 'vercel'
+      working-directory: '.'
+    secrets:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+

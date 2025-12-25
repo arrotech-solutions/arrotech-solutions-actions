@@ -1,0 +1,165 @@
+# =============================================================================
+# Complete CI/CD Pipeline Template for Python Projects
+# =============================================================================
+# Copy this file to your repository's .github/workflows/ directory and customize.
+# 
+# This template demonstrates using all the centralized reusable workflows
+# for a typical Python application.
+# =============================================================================
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  # ===========================================================================
+  # Stage 1: Code Quality & Security
+  # ===========================================================================
+  
+  code-quality:
+    name: Code Quality
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-code-quality.yml@main
+    with:
+      language: 'python'
+      python-version: '3.11'
+      fail-on-warnings: false
+
+  security-scan:
+    name: Security Scan
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-security-scan.yml@main
+    with:
+      language: 'python'
+      enable-codeql: true
+      enable-dependency-scan: true
+      enable-secret-scan: true
+      fail-on-high-severity: true
+
+  # ===========================================================================
+  # Stage 2: Testing
+  # ===========================================================================
+  
+  test:
+    name: Tests
+    needs: [code-quality]
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/ci-test.yml@main
+    with:
+      language: 'python'
+      python-version: '3.11'
+      coverage-threshold: 80
+      upload-coverage: true
+      parallel-tests: true
+
+  # Matrix testing for multiple Python versions
+  test-matrix:
+    name: Test Python ${{ matrix.python-version }}
+    needs: [code-quality]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.10', '3.11', '3.12']
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pytest pytest-cov
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+      
+      - name: Run tests
+        run: pytest -v
+
+  # ===========================================================================
+  # Stage 3: Build Package
+  # ===========================================================================
+  
+  build:
+    name: Build Package
+    needs: [test, security-scan]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-build-artifact.yml@main
+    with:
+      artifact-type: 'python'
+      python-publish: ${{ github.event_name == 'release' }}
+    secrets:
+      PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+  # ===========================================================================
+  # Stage 4: Docker Build (if applicable)
+  # ===========================================================================
+  
+  docker:
+    name: Build Docker Image
+    needs: [test, security-scan]
+    if: github.event_name == 'push' || github.event_name == 'release'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-build-artifact.yml@main
+    with:
+      artifact-type: 'docker'
+      registry: 'ghcr'
+      push-image: true
+    secrets:
+      REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ===========================================================================
+  # Stage 5: Deploy
+  # ===========================================================================
+  
+  deploy-staging:
+    name: Deploy Staging
+    needs: [docker]
+    if: github.ref == 'refs/heads/develop'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      environment: 'staging'
+      platform: 'kubernetes'
+      image: ${{ needs.docker.outputs.artifact-url }}
+      namespace: 'staging'
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_STAGING }}
+
+  deploy-production:
+    name: Deploy Production
+    needs: [docker]
+    if: github.event_name == 'release'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/cd-deploy.yml@main
+    with:
+      environment: 'production'
+      platform: 'kubernetes'
+      image: ${{ needs.docker.outputs.artifact-url }}
+      namespace: 'production'
+    secrets:
+      KUBE_CONFIG: ${{ secrets.KUBE_CONFIG_PROD }}
+
+  # ===========================================================================
+  # PR Checks
+  # ===========================================================================
+  
+  pr-checks:
+    name: PR Validation
+    if: github.event_name == 'pull_request'
+    uses: arrotech-solutions/arrotech-solutions-actions/.github/workflows/pr-checks.yml@main
+    with:
+      require-conventional-commits: true
+      require-tests: true
+

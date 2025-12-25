@@ -1,0 +1,103 @@
+# =============================================================================
+# Self CI - Validate workflows in this repository
+# =============================================================================
+# This workflow validates all workflow files in this repository to ensure
+# they are syntactically correct and follow best practices.
+# =============================================================================
+
+name: Self CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'templates/**'
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - 'templates/**'
+
+jobs:
+  validate-workflows:
+    name: Validate Workflows
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install actionlint
+        run: |
+          bash <(curl https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          sudo mv actionlint /usr/local/bin/
+
+      - name: Lint workflow files
+        run: |
+          echo "Validating .github/workflows/*.yml"
+          actionlint -color .github/workflows/*.yml
+          
+          echo "Validating templates/*.yml"
+          for file in templates/*.yml; do
+            echo "Checking $file..."
+            actionlint -color "$file" || true
+          done
+
+      - name: Check for common issues
+        run: |
+          echo "Checking for hardcoded secrets..."
+          if grep -rE "(password|secret|token|key)\s*[:=]\s*['\"][^$]" .github/workflows/ templates/; then
+            echo "::error::Potential hardcoded secrets detected!"
+            exit 1
+          fi
+          
+          echo "Checking for deprecated actions..."
+          if grep -rE "actions/checkout@v[12]" .github/workflows/ templates/; then
+            echo "::warning::Using outdated checkout action version"
+          fi
+          
+          echo "All checks passed!"
+
+  test-workflow-calls:
+    name: Test Workflow Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate YAML syntax
+        run: |
+          pip install yamllint
+          yamllint -c .yamllint.yml .github/workflows/ templates/ || true
+
+      - name: Check required inputs
+        run: |
+          echo "Verifying all workflow_call workflows have documented inputs..."
+          for file in .github/workflows/*.yml; do
+            if grep -q "workflow_call:" "$file"; then
+              echo "✓ $file is a reusable workflow"
+              
+              # Check for description in header
+              if ! head -20 "$file" | grep -q "Usage"; then
+                echo "::warning::$file may be missing usage documentation"
+              fi
+            fi
+          done
+
+  documentation-check:
+    name: Check Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify README references
+        run: |
+          echo "Checking that all workflows are documented in README..."
+          for file in .github/workflows/*.yml; do
+            basename="${file##*/}"
+            if ! grep -q "$basename" README.md; then
+              echo "::warning::$basename may not be documented in README.md"
+            fi
+          done
+
