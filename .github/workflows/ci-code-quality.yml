@@ -96,11 +96,11 @@ jobs:
           ESLINT_ARGS: ${{ inputs.eslint-args }}
           FAIL_ON_WARNINGS: ${{ inputs.fail-on-warnings }}
         run: |
-          ARGS="$ESLINT_ARGS"
           if [ "$FAIL_ON_WARNINGS" = "true" ]; then
-            ARGS="$ARGS --max-warnings=0"
+            npx eslint . $ESLINT_ARGS --max-warnings=0 --format stylish
+          else
+            npx eslint . $ESLINT_ARGS --format stylish
           fi
-          npx eslint . $ARGS --format stylish
         continue-on-error: ${{ !inputs.fail-on-warnings }}
 
       - name: Run Prettier Check

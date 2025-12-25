@@ -93,9 +93,11 @@ jobs:
           # Get PR details from environment variables (safe from injection)
           TOTAL_CHANGES=$((ADDITIONS + DELETIONS))
           
-          echo "title=$PR_TITLE" >> "$GITHUB_OUTPUT"
-          echo "files-changed=$FILES_CHANGED" >> "$GITHUB_OUTPUT"
-          echo "lines-changed=$TOTAL_CHANGES" >> "$GITHUB_OUTPUT"
+          {
+            echo "title=$PR_TITLE"
+            echo "files-changed=$FILES_CHANGED"
+            echo "lines-changed=$TOTAL_CHANGES"
+          } >> "$GITHUB_OUTPUT"
           
           {
             echo "## PR Statistics"

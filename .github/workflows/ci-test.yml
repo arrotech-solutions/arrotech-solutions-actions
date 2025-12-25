@@ -215,12 +215,10 @@ jobs:
         run: |
           if [ -n "$TEST_COMMAND" ]; then
             $TEST_COMMAND
+          elif [ "$PARALLEL_TESTS" = "true" ]; then
+            pytest -n auto --cov=. --cov-report=xml --cov-report=term-missing -v
           else
-            PYTEST_ARGS=""
-            if [ "$PARALLEL_TESTS" = "true" ]; then
-              PYTEST_ARGS="$PYTEST_ARGS -n auto"
-            fi
-            pytest $PYTEST_ARGS --cov=. --cov-report=xml --cov-report=term-missing -v
+            pytest --cov=. --cov-report=xml --cov-report=term-missing -v
           fi
 
       - name: Check coverage threshold

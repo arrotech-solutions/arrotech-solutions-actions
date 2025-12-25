@@ -239,19 +239,18 @@ jobs:
           DRY_RUN_MODE: ${{ inputs.dry-run }}
           ROLLOUT_TIMEOUT: ${{ inputs.rollout-timeout }}
         run: |
-          HELM_ARGS="upgrade --install $DEPLOYMENT_NAME $CHART_PATH"
-          HELM_ARGS="$HELM_ARGS --namespace $NAMESPACE"
-          HELM_ARGS="$HELM_ARGS --set image=$IMAGE"
-          
-          if [ -n "$VALUES_FILE" ]; then
-            HELM_ARGS="$HELM_ARGS -f $VALUES_FILE"
-          fi
-          
+          # Build helm command with proper quoting
+          DRY_RUN_FLAG=""
           if [ "$DRY_RUN_MODE" = "true" ]; then
-            HELM_ARGS="$HELM_ARGS --dry-run"
+            DRY_RUN_FLAG="--dry-run"
           fi
           
-          helm $HELM_ARGS --wait --timeout "${ROLLOUT_TIMEOUT}s"
+          helm upgrade --install "$DEPLOYMENT_NAME" "$CHART_PATH" \
+            --namespace "$NAMESPACE" \
+            --set "image=$IMAGE" \
+            ${VALUES_FILE:+-f "$VALUES_FILE"} \
+            $DRY_RUN_FLAG \
+            --wait --timeout "${ROLLOUT_TIMEOUT}s"
 
       - name: Deploy with kubectl
         id: kubectl-deploy
@@ -431,15 +430,20 @@ jobs:
       - name: Build project
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          PROD_FLAG: ${{ inputs.environment == 'production' && '--prod' || '' }}
-        run: vercel build $PROD_FLAG --token="$VERCEL_TOKEN"
+          IS_PRODUCTION: ${{ inputs.environment == 'production' }}
+        run: |
+          if [ "$IS_PRODUCTION" = "true" ]; then
+            vercel build --prod --token="$VERCEL_TOKEN"
+          else
+            vercel build --token="$VERCEL_TOKEN"
+          fi
 
       - name: Deploy to Vercel
         id: deploy
         env:
           DRY_RUN_MODE: ${{ inputs.dry-run }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-          PROD_FLAG: ${{ inputs.environment == 'production' && '--prod' || '' }}
+          IS_PRODUCTION: ${{ inputs.environment == 'production' }}
         run: |
           if [ "$DRY_RUN_MODE" = "true" ]; then
             echo "Dry run - would deploy to Vercel"
@@ -447,7 +451,11 @@ jobs:
             exit 0
           fi
           
-          DEPLOY_URL=$(vercel deploy --prebuilt $PROD_FLAG --token="$VERCEL_TOKEN")
+          if [ "$IS_PRODUCTION" = "true" ]; then
+            DEPLOY_URL=$(vercel deploy --prebuilt --prod --token="$VERCEL_TOKEN")
+          else
+            DEPLOY_URL=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN")
+          fi
           echo "url=$DEPLOY_URL" >> "$GITHUB_OUTPUT"
           echo "status=completed" >> "$GITHUB_OUTPUT"
 
