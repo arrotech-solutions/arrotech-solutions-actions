@@ -839,9 +839,9 @@ jobs:
           DEPLOY_CMD="$DEPLOY_CMD --vm-size $VM_SIZE"
           DEPLOY_CMD="$DEPLOY_CMD --vm-memory $VM_MEMORY"
           
-          # Add region if specified
+          # Add region if specified (use --primary-region for fly deploy)
           if [ -n "$REGION" ]; then
-            DEPLOY_CMD="$DEPLOY_CMD --region $REGION"
+            DEPLOY_CMD="$DEPLOY_CMD --primary-region $REGION"
           fi
           
           # Add HA mode
