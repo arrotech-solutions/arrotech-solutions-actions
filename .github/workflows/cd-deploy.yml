@@ -793,13 +793,9 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
           APP_NAME: ${{ inputs.flyio-app-name || github.event.repository.name }}
-          REGION: ${{ inputs.flyio-region }}
         run: |
-          if [ -n "$REGION" ]; then
-            flyctl apps create "$APP_NAME" --org personal -r "$REGION"
-          else
-            flyctl apps create "$APP_NAME" --org personal
-          fi
+          # Region is set during deployment, not app creation
+          flyctl apps create "$APP_NAME" --org personal
 
       - name: Set Fly.io secrets
         if: "!inputs.dry-run"
