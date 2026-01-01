@@ -866,11 +866,8 @@ jobs:
           # Execute deployment
           eval "$DEPLOY_CMD"
           
-          # Get deployment URL
-          URL=$(flyctl info -a "$APP_NAME" --json | jq -r '.Hostname // empty')
-          if [ -n "$URL" ]; then
-            echo "url=https://$URL" >> "$GITHUB_OUTPUT"
-          fi
+          # Set deployment URL (Fly.io apps are at {app-name}.fly.dev)
+          echo "url=https://${APP_NAME}.fly.dev" >> "$GITHUB_OUTPUT"
           echo "status=completed" >> "$GITHUB_OUTPUT"
 
       - name: Get deployment status
