@@ -147,6 +147,11 @@ on:
         required: false
         type: string
         default: ''
+      railway-environment:
+        description: 'Railway environment name (if omitted, Railway defaults to token environment)'
+        required: false
+        type: string
+        default: ''
       # Fly.io inputs
       flyio-app-name:
         description: 'Fly.io application name'
@@ -934,11 +939,11 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE: ${{ inputs.railway-service }}
-          ENVIRONMENT: ${{ inputs.environment }}
+          RAILWAY_ENV: ${{ inputs.railway-environment }}
           DRY_RUN_MODE: ${{ inputs.dry-run }}
         run: |
           if [ "$DRY_RUN_MODE" = "true" ]; then
-            echo "Dry run - would deploy to Railway service $RAILWAY_SERVICE in env $ENVIRONMENT"
+            echo "Dry run - would deploy to Railway service $RAILWAY_SERVICE in env $RAILWAY_ENV"
             echo "status=dry-run" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -949,8 +954,8 @@ jobs:
             DEPLOY_CMD="$DEPLOY_CMD --service $RAILWAY_SERVICE"
           fi
           
-          if [ -n "$ENVIRONMENT" ]; then
-            DEPLOY_CMD="$DEPLOY_CMD --environment $ENVIRONMENT"
+          if [ -n "$RAILWAY_ENV" ]; then
+            DEPLOY_CMD="$DEPLOY_CMD --environment $RAILWAY_ENV"
           fi
           
           echo "Executing: $DEPLOY_CMD"
