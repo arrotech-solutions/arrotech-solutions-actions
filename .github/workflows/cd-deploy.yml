@@ -26,7 +26,7 @@ on:
         required: true
         type: string
       platform:
-        description: 'Deployment platform: kubernetes, ecs, flyio, vercel, netlify, ssh'
+        description: 'Deployment platform: kubernetes, ecs, flyio, railway, vercel, netlify, ssh'
         required: false
         type: string
         default: 'kubernetes'
@@ -141,6 +141,12 @@ on:
         required: false
         type: string
         default: '/var/www/app'
+      # Railway inputs
+      railway-service:
+        description: 'Railway service name to deploy to'
+        required: false
+        type: string
+        default: ''
       # Fly.io inputs
       flyio-app-name:
         description: 'Fly.io application name'
@@ -247,6 +253,9 @@ on:
         required: false
       FLY_API_TOKEN:
         description: 'Fly.io API token for deployment'
+        required: false
+      RAILWAY_TOKEN:
+        description: 'Railway API token for deployment'
         required: false
       DEPLOY_ENV_VARS:
         description: 'Environment variables for deployment (JSON format)'
@@ -894,6 +903,63 @@ jobs:
           flyctl scale count "$MIN_MACHINES" --max "$MAX_MACHINES" -a "$APP_NAME" || true
 
   # ---------------------------------------------------------------------------
+  # Railway Deployment
+  # ---------------------------------------------------------------------------
+  deploy-railway:
+    name: Deploy to Railway
+    if: inputs.platform == 'railway'
+    needs: pre-check
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    outputs:
+      url: ${{ steps.deploy.outputs.url }}
+      status: ${{ steps.deploy.outputs.status }}
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Railway CLI
+        run: npm i -g @railway/cli
+
+      - name: Deploy to Railway
+        id: deploy
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE: ${{ inputs.railway-service }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          DRY_RUN_MODE: ${{ inputs.dry-run }}
+        run: |
+          if [ "$DRY_RUN_MODE" = "true" ]; then
+            echo "Dry run - would deploy to Railway service $RAILWAY_SERVICE in env $ENVIRONMENT"
+            echo "status=dry-run" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          
+          DEPLOY_CMD="railway up --detach"
+          
+          if [ -n "$RAILWAY_SERVICE" ]; then
+            DEPLOY_CMD="$DEPLOY_CMD --service $RAILWAY_SERVICE"
+          fi
+          
+          if [ -n "$ENVIRONMENT" ]; then
+            DEPLOY_CMD="$DEPLOY_CMD --environment $ENVIRONMENT"
+          fi
+          
+          echo "Executing: $DEPLOY_CMD"
+          eval "$DEPLOY_CMD"
+          
+          echo "url=" >> "$GITHUB_OUTPUT"
+          echo "status=completed" >> "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
   # SSH Deployment
   # ---------------------------------------------------------------------------
   deploy-ssh:
@@ -955,17 +1021,18 @@ jobs:
   deploy:
     name: Deployment Summary
     runs-on: ubuntu-latest
-    needs: [deploy-kubernetes, deploy-ecs, deploy-flyio, deploy-vercel, deploy-netlify, deploy-ssh]
+    needs: [deploy-kubernetes, deploy-ecs, deploy-flyio, deploy-railway, deploy-vercel, deploy-netlify, deploy-ssh]
     if: always()
     outputs:
-      url: ${{ needs.deploy-kubernetes.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-flyio.outputs.url || needs.deploy-vercel.outputs.url || needs.deploy-netlify.outputs.url || needs.deploy-ssh.outputs.url }}
-      status: ${{ needs.deploy-kubernetes.outputs.status || needs.deploy-ecs.outputs.status || needs.deploy-flyio.outputs.status || needs.deploy-vercel.outputs.status || needs.deploy-netlify.outputs.status || needs.deploy-ssh.outputs.status }}
+      url: ${{ needs.deploy-kubernetes.outputs.url || needs.deploy-ecs.outputs.url || needs.deploy-flyio.outputs.url || needs.deploy-railway.outputs.url || needs.deploy-vercel.outputs.url || needs.deploy-netlify.outputs.url || needs.deploy-ssh.outputs.url }}
+      status: ${{ needs.deploy-kubernetes.outputs.status || needs.deploy-ecs.outputs.status || needs.deploy-flyio.outputs.status || needs.deploy-railway.outputs.status || needs.deploy-vercel.outputs.status || needs.deploy-netlify.outputs.status || needs.deploy-ssh.outputs.status }}
     steps:
       - name: Deployment summary
         env:
           K8S_RESULT: ${{ needs.deploy-kubernetes.result }}
           ECS_RESULT: ${{ needs.deploy-ecs.result }}
           FLYIO_RESULT: ${{ needs.deploy-flyio.result }}
+          RAILWAY_RESULT: ${{ needs.deploy-railway.result }}
           VERCEL_RESULT: ${{ needs.deploy-vercel.result }}
           NETLIFY_RESULT: ${{ needs.deploy-netlify.result }}
           SSH_RESULT: ${{ needs.deploy-ssh.result }}
@@ -978,6 +1045,7 @@ jobs:
             echo "| Kubernetes | $K8S_RESULT |"
             echo "| AWS ECS | $ECS_RESULT |"
             echo "| Fly.io | $FLYIO_RESULT |"
+            echo "| Railway | $RAILWAY_RESULT |"
             echo "| Vercel | $VERCEL_RESULT |"
             echo "| Netlify | $NETLIFY_RESULT |"
             echo "| SSH | $SSH_RESULT |"
