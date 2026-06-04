@@ -248,7 +248,7 @@ jobs:
         run: npm pack
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: npm-package
           path: ${{ inputs.working-directory }}/*.tgz
@@ -308,7 +308,7 @@ jobs:
         run: twine check dist/*
 
       - name: Upload package artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: python-package
           path: ${{ inputs.working-directory }}/dist/
@@ -381,7 +381,7 @@ jobs:
 
       - name: Upload binaries
         id: upload
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: go-binaries
           path: ${{ inputs.working-directory }}/dist/
